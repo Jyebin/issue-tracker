@@ -1,0 +1,47 @@
+# 민감 정보 / 환경변수
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+
+# Next.js 빌드 산출물
+.next/
+out/
+build/
+
+# 의존성
+node_modules/
+
+# 디버그 로그
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.user
+
+# 캐시
+.cache/
+.eslintcache
+.parcel-cache
+
+# 타입스크립트 빌드 정보
+*.tsbuildinfo
+next-env.d.ts
+
+# Claude Code
+.claude/
+
+# 로그
+*.log
+dev.log
