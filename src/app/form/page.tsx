@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { loadPipeline } from '@/lib/pipelineStore'
 
 type Priority = 'critical' | 'high' | 'medium' | 'low'
@@ -11,6 +11,7 @@ type MissingItem = {
   question: string
   description: string | null
   priority: Priority
+  suggestions: string[] | null
   order_index: number
   answer: string | null
   answered_at: string | null
@@ -25,11 +26,13 @@ const PRIORITY_META: Record<Priority, { label: string; color: string; bg: string
 
 export default function FormPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
 
   const [projectId, setProjectId] = useState<number | null>(null)
   const [isPipelineMode, setIsPipelineMode]   = useState(false)
   const [items, setItems]                     = useState<MissingItem[]>([])
   const [answers, setAnswers]                 = useState<Record<number, string>>({})
+  const [showCustom, setShowCustom]           = useState<Record<number, boolean>>({})
   const [saving, setSaving]                   = useState<Record<number, boolean>>({})
   const [saved, setSaved]                     = useState<Record<number, boolean>>({})
   const [loading, setLoading]                 = useState(true)
@@ -41,7 +44,13 @@ export default function FormPage() {
   useEffect(() => {
     const pipeline = loadPipeline()
     setIsPipelineMode(pipeline?.status === 'paused')
-    const pid = pipeline?.projectId ?? null
+
+    // 우선순위: URL 파라미터 → 파이프라인 스토어 → localStorage
+    const urlPid = searchParams.get('projectId')
+    const pid = urlPid
+      ? Number(urlPid)
+      : pipeline?.projectId
+        ?? (localStorage.getItem('testflow_project_id') ? Number(localStorage.getItem('testflow_project_id')) : null)
     setProjectId(pid)
 
     if (!pid) {
@@ -221,9 +230,9 @@ export default function FormPage() {
           <div className="empty-state" style={{ padding: '60px 24px' }}>
             <div className="empty-state-icon">📄</div>
             <div className="empty-state-text">기획서가 업로드되지 않았습니다</div>
-            <div className="empty-state-sub">대시보드에서 기획서를 업로드하고 자동 실행을 시작하세요</div>
-            <button className="btn btn-primary" style={{ marginTop: '16px' }} onClick={() => router.push('/dashboard')}>
-              대시보드로 이동 →
+            <div className="empty-state-sub">기획서를 먼저 업로드해주세요</div>
+            <button className="btn btn-primary" style={{ marginTop: '16px' }} onClick={() => router.push('/upload')}>
+              기획서 업로드 →
             </button>
           </div>
         </div>
@@ -261,6 +270,11 @@ export default function FormPage() {
             const ans    = answers[item.id] ?? ''
             const isSaved = saved[item.id]
             const isSaving = saving[item.id]
+
+            const suggestions: string[] = Array.isArray(item.suggestions)
+              ? item.suggestions
+              : (typeof item.suggestions === 'string' ? JSON.parse(item.suggestions) : [])
+            const isCustom = showCustom[item.id] ?? false
 
             return (
               <div key={item.id} className="card" style={{
@@ -305,7 +319,53 @@ export default function FormPage() {
                   </div>
                 )}
 
-                {/* Answer textarea */}
+                {/* Suggestion chips */}
+                {suggestions.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
+                    {suggestions.map((s, i) => {
+                      const isSelected = ans === s && !isCustom
+                      return (
+                        <button
+                          key={i}
+                          onClick={() => {
+                            setAnswers(prev => ({ ...prev, [item.id]: s }))
+                            setSaved(prev => ({ ...prev, [item.id]: false }))
+                            setShowCustom(prev => ({ ...prev, [item.id]: false }))
+                            saveAnswer(item.id, s)
+                          }}
+                          style={{
+                            padding: '8px 14px', borderRadius: '20px', fontSize: '12px', fontWeight: 600,
+                            cursor: 'pointer', transition: 'all .15s',
+                            border: `2px solid ${isSelected ? p.color : '#E5E7EB'}`,
+                            background: isSelected ? p.bg : 'white',
+                            color: isSelected ? p.color : '#374151',
+                          }}
+                        >
+                          {isSelected ? '✓ ' : ''}{s}
+                        </button>
+                      )
+                    })}
+                    <button
+                      onClick={() => {
+                        setShowCustom(prev => ({ ...prev, [item.id]: true }))
+                        setAnswers(prev => ({ ...prev, [item.id]: '' }))
+                        setSaved(prev => ({ ...prev, [item.id]: false }))
+                      }}
+                      style={{
+                        padding: '8px 14px', borderRadius: '20px', fontSize: '12px', fontWeight: 600,
+                        cursor: 'pointer', transition: 'all .15s',
+                        border: `2px solid ${isCustom ? '#6B7280' : '#E5E7EB'}`,
+                        background: isCustom ? '#F9FAFB' : 'white',
+                        color: '#6B7280',
+                      }}
+                    >
+                      ✏️ 기타
+                    </button>
+                  </div>
+                )}
+
+                {/* Answer textarea — suggestions 없거나 기타 선택 시 표시 */}
+                {(suggestions.length === 0 || isCustom) && (
                 <div style={{ position: 'relative' }}>
                   <textarea
                     value={ans}
@@ -335,8 +395,10 @@ export default function FormPage() {
                     </div>
                   )}
                 </div>
+                )}
 
-                {/* Manual save button */}
+                {/* Manual save button — 기타 직접 입력 시에만 표시 */}
+                {(suggestions.length === 0 || isCustom) && (
                 <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
                   <button
                     onClick={() => saveAnswer(item.id, ans)}
@@ -352,6 +414,7 @@ export default function FormPage() {
                     {isSaved ? '✅ 저장됨' : '저장'}
                   </button>
                 </div>
+                )}
               </div>
             )
           })}

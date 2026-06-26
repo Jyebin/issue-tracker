@@ -1,20 +1,72 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 
-type UploadState = 'idle' | 'analyzing' | 'done'
+type UploadState = 'idle' | 'analyzing' | 'done' | 'error'
+
+interface AnalysisResult {
+  projectId: number
+  featureCount: number
+  missingCount: number
+}
 
 export default function UploadPage() {
   const router = useRouter()
   const [state, setState] = useState<UploadState>('idle')
+  const [dragging, setDragging] = useState(false)
+  const [fileName, setFileName] = useState('')
+  const [result, setResult] = useState<AnalysisResult | null>(null)
+  const [errorMsg, setErrorMsg] = useState('')
   const [urlValue, setUrlValue] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  function simulateUpload() {
-    if (state !== 'idle') return
+  async function uploadFile(file: File) {
+    if (state === 'analyzing') return
+    setFileName(file.name)
     setState('analyzing')
-    setTimeout(() => setState('done'), 2000)
+    setErrorMsg('')
+
+    const formData = new FormData()
+    formData.append('file', file)
+
+    try {
+      const res = await fetch('/api/upload', { method: 'POST', body: formData })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? '업로드 실패')
+      setResult(data)
+      localStorage.setItem('testflow_project_id', String(data.projectId))
+      setState('done')
+    } catch (err) {
+      setErrorMsg(String(err))
+      setState('error')
+    }
+  }
+
+  function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (file) uploadFile(file)
+    e.target.value = ''
+  }
+
+  const onDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setDragging(false)
+    const file = e.dataTransfer.files?.[0]
+    if (file) uploadFile(file)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state])
+
+  const onDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setDragging(true)
+  }, [])
+
+  const onDragLeave = useCallback(() => setDragging(false), [])
+
+  function onZoneClick() {
+    if (state === 'analyzing') return
+    fileInputRef.current?.click()
   }
 
   return (
@@ -29,20 +81,35 @@ export default function UploadPage() {
           {/* Upload zone */}
           <div
             className="upload-zone"
-            onClick={simulateUpload}
+            onClick={onZoneClick}
+            onDrop={onDrop}
+            onDragOver={onDragOver}
+            onDragLeave={onDragLeave}
             style={
-              state === 'done' ? { borderColor: 'var(--success)', background: '#F0FDF4' }
-              : state === 'analyzing' ? { borderColor: 'var(--primary)', background: 'var(--primary-light)' }
+              state === 'done'        ? { borderColor: 'var(--success)', background: '#F0FDF4' }
+              : state === 'analyzing' ? { borderColor: 'var(--primary)', background: 'var(--primary-light)', cursor: 'default' }
+              : state === 'error'     ? { borderColor: 'var(--danger)', background: '#FEF2F2' }
+              : dragging              ? { borderColor: 'var(--primary)', background: 'var(--primary-light)' }
               : undefined
             }
           >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.docx,.xlsx,.xls,.doc,.pptx,.ppt,.txt,.md,.png"
+              style={{ display: 'none' }}
+              onChange={onFileChange}
+            />
+
             {state === 'idle' && (
               <>
                 <div className="upload-icon">📄</div>
-                <div className="upload-title">파일을 드래그하거나 클릭하여 업로드</div>
+                <div className="upload-title">
+                  {dragging ? '여기에 놓으세요' : '파일을 드래그하거나 클릭하여 업로드'}
+                </div>
                 <div className="upload-sub">또는 Notion / Confluence URL을 붙여넣으세요</div>
                 <div className="upload-formats">
-                  {['PDF','DOCX','XLSX','Notion','Confluence'].map((f) => (
+                  {['PDF', 'DOCX', 'XLSX', 'PNG', 'Notion', 'Confluence'].map((f) => (
                     <span key={f} className="format-tag">{f}</span>
                   ))}
                 </div>
@@ -52,14 +119,21 @@ export default function UploadPage() {
               <>
                 <div style={{ fontSize: '36px', marginBottom: '10px' }}>⏳</div>
                 <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--primary)' }}>AI 분석 중...</div>
-                <div style={{ fontSize: '11px', color: 'var(--gray-400)', marginTop: '6px' }}>기획서를 분석하고 있어요</div>
+                <div style={{ fontSize: '11px', color: 'var(--gray-400)', marginTop: '6px' }}>{fileName}</div>
               </>
             )}
             {state === 'done' && (
               <>
                 <div style={{ fontSize: '36px', marginBottom: '10px' }}>✅</div>
                 <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--success)' }}>분석 완료!</div>
-                <div style={{ fontSize: '11px', color: 'var(--gray-400)', marginTop: '6px' }}>아래 결과를 확인하세요</div>
+                <div style={{ fontSize: '11px', color: 'var(--gray-400)', marginTop: '6px' }}>{fileName}</div>
+              </>
+            )}
+            {state === 'error' && (
+              <>
+                <div style={{ fontSize: '36px', marginBottom: '10px' }}>❌</div>
+                <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--danger)' }}>업로드 실패</div>
+                <div style={{ fontSize: '11px', color: 'var(--gray-400)', marginTop: '6px' }}>클릭하여 다시 시도</div>
               </>
             )}
           </div>
@@ -73,31 +147,34 @@ export default function UploadPage() {
               value={urlValue}
               onChange={(e) => setUrlValue(e.target.value)}
             />
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".pdf,.docx,.xlsx,.xls,.doc,.pptx,.ppt,.txt,.md"
-              style={{ display: 'none' }}
-              onChange={(e) => {
-                if (e.target.files?.[0]) simulateUpload()
-              }}
-            />
             <button className="btn btn-secondary" onClick={() => fileInputRef.current?.click()}>
               불러오기
             </button>
           </div>
 
-          {/* Analysis result — shown after upload */}
-          {state === 'done' && (
+          {state === 'error' && errorMsg && (
+            <div className="alert alert-error" style={{ marginBottom: '12px' }}>❌ {errorMsg}</div>
+          )}
+
+          {/* Analysis result */}
+          {state === 'done' && result && (
             <div>
               <div className="alert alert-success">✅ 분석 완료! 기획서에서 기능을 감지했습니다.</div>
               <div className="analysis-result">
-                <div className="result-card"><div className="num" style={{ color: 'var(--primary)' }}>—</div><div className="lbl">감지 기능</div></div>
-                <div className="result-card"><div className="num" style={{ color: 'var(--danger)' }}>—</div><div className="lbl">Critical 누락</div></div>
-                <div className="result-card"><div className="num" style={{ color: 'var(--warning)' }}>—</div><div className="lbl">High 누락</div></div>
-                <div className="result-card"><div className="num" style={{ color: 'var(--info)' }}>—</div><div className="lbl">예상 TC</div></div>
+                <div className="result-card">
+                  <div className="num" style={{ color: 'var(--primary)' }}>{result.featureCount}</div>
+                  <div className="lbl">감지 기능</div>
+                </div>
+                <div className="result-card">
+                  <div className="num" style={{ color: 'var(--danger)' }}>{result.missingCount}</div>
+                  <div className="lbl">누락 항목</div>
+                </div>
               </div>
-              <button className="btn btn-primary btn-lg" style={{ width: '100%' }} onClick={() => router.push('/form')}>
+              <button
+                className="btn btn-primary btn-lg"
+                style={{ width: '100%' }}
+                onClick={() => router.push(`/form?projectId=${result.projectId}`)}
+              >
                 📋 누락 항목 보완하기 →
               </button>
             </div>

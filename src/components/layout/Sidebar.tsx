@@ -3,7 +3,6 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { loadPipeline } from '@/lib/pipelineStore'
 
 const NAV = [
   {
@@ -21,14 +20,15 @@ const NAV = [
       { href: '/form',        icon: '📋', label: '누락 항목 보완' },
       { href: '/tc-list',     icon: '🧪', label: 'TC 목록' },
       { href: '/code-viewer', icon: '💻', label: '테스트 코드' },
+      { href: '/tc-detail',  icon: '▶️', label: '테스트 수행' },
+      { href: '/issue-detail', icon: '🔍', label: '이슈 상세' },
     ],
   },
   {
     section: '이슈 관리',
     mode: 'manual',
     items: [
-      { href: '/board',        icon: '📌', label: '이슈 보드', badgeKey: 'issues' },
-      { href: '/issue-detail', icon: '🔍', label: '이슈 상세' },
+      { href: '/board', icon: '📌', label: '이슈 보드', badgeKey: 'issues' },
     ],
   },
   {
@@ -45,14 +45,10 @@ export default function Sidebar() {
   const [pendingIssues, setPendingIssues] = useState(0)
 
   useEffect(() => {
-    function sync() {
-      const saved = loadPipeline()
-      setPendingIssues(saved?.results?.issueCount ?? 0)
-    }
-    sync()
-    // Re-sync when storage changes (e.g. pipeline completes in another tab)
-    window.addEventListener('storage', sync)
-    return () => window.removeEventListener('storage', sync)
+    fetch('/api/issues/count')
+      .then(r => r.json())
+      .then(data => setPendingIssues(data.count ?? 0))
+      .catch(() => setPendingIssues(0))
   }, [])
 
   return (

@@ -8,7 +8,7 @@ export async function GET(
 ) {
   const projectId = parseInt(params.id)
   const [rows] = await pool.execute<RowDataPacket[]>(
-    `SELECT mi.id, mi.question, mi.description, mi.priority, mi.order_index,
+    `SELECT mi.id, mi.question, mi.description, mi.priority, mi.suggestions, mi.order_index,
             mia.answer, mia.answered_at
      FROM missing_items mi
      LEFT JOIN missing_item_answers mia ON mi.id = mia.missing_item_id
