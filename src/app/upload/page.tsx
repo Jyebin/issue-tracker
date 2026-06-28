@@ -1,7 +1,30 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+
+const STEPS = ['파일 읽는 중...', '기획서 분석 중...', '누락 항목 감지 중...', 'AI 검토 중...']
+
+function AnalyzingDots() {
+  const [stepIdx, setStepIdx] = useState(0)
+  const [dots, setDots]       = useState('')
+
+  useEffect(() => {
+    const dotsTimer = setInterval(() => {
+      setDots(d => d.length >= 3 ? '' : d + '.')
+    }, 400)
+    const stepTimer = setInterval(() => {
+      setStepIdx(i => (i + 1) % STEPS.length)
+    }, 2200)
+    return () => { clearInterval(dotsTimer); clearInterval(stepTimer) }
+  }, [])
+
+  return (
+    <div style={{ fontSize: '12px', color: 'var(--primary)', minHeight: '18px', fontWeight: 500 }}>
+      {STEPS[stepIdx]}{dots}
+    </div>
+  )
+}
 
 type UploadState = 'idle' | 'analyzing' | 'done' | 'error'
 
@@ -117,9 +140,21 @@ export default function UploadPage() {
             )}
             {state === 'analyzing' && (
               <>
-                <div style={{ fontSize: '36px', marginBottom: '10px' }}>⏳</div>
-                <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--primary)' }}>AI 분석 중...</div>
-                <div style={{ fontSize: '11px', color: 'var(--gray-400)', marginTop: '6px' }}>{fileName}</div>
+                <div style={{ position: 'relative', width: '56px', height: '56px', margin: '0 auto 16px' }}>
+                  <div style={{
+                    width: '56px', height: '56px', borderRadius: '50%',
+                    border: '4px solid var(--primary-light)',
+                    borderTopColor: 'var(--primary)',
+                    animation: 'spin 0.9s linear infinite',
+                  }} />
+                  <div style={{
+                    position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: '20px',
+                  }}>🤖</div>
+                </div>
+                <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--primary)', marginBottom: '6px' }}>AI 분석 중</div>
+                <AnalyzingDots />
+                <div style={{ fontSize: '11px', color: 'var(--gray-400)', marginTop: '8px' }}>{fileName}</div>
               </>
             )}
             {state === 'done' && (

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 
@@ -76,6 +76,16 @@ export default function TCDetailPage() {
   const [showCode, setShowCode]   = useState(true)
   const [copied, setCopied]       = useState(false)
 
+  // 테스트 실행
+  const [runStatus, setRunStatus] = useState<'idle'|'running'|'passed'|'failed'>('idle')
+  const [runLogs, setRunLogs]     = useState<{ type: string; message: string }[]>([])
+  const [videoUrl, setVideoUrl]   = useState<string | null>(null)
+  const logsEndRef                = useRef<HTMLDivElement>(null)
+
+  // 정렬 / 필터
+  const [sortMode, setSortMode]     = useState<'id' | 'type'>('id')
+  const [typeFilter, setTypeFilter] = useState<'all' | TCType>('all')
+
   useEffect(() => {
     const urlPid  = searchParams.get('projectId')
     const urlTcId = searchParams.get('tcId')
@@ -128,6 +138,59 @@ export default function TCDetailPage() {
     setIssueTitle('')
     setIssueDesc('')
     setIssuePriority(tc.priority)
+    setRunStatus('idle')
+    setRunLogs([])
+    setVideoUrl(null)
+  }
+
+  async function runTest() {
+    if (!selectedTc || !projectId || runStatus === 'running') return
+    setRunStatus('running')
+    setRunLogs([])
+
+    try {
+      const res = await fetch(`/api/tc/${selectedTc.id}/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId }),
+      })
+      if (!res.ok) {
+        const data = await res.json()
+        setRunLogs([{ type: 'err', message: data.error ?? '실행 실패' }])
+        setRunStatus('failed')
+        return
+      }
+
+      const reader = res.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const parts = buffer.split('\n\n')
+        buffer = parts.pop() ?? ''
+        for (const part of parts) {
+          const line = part.replace(/^data: /, '').trim()
+          if (!line) continue
+          try {
+            const event = JSON.parse(line) as { type: string; message?: string; passed?: boolean; url?: string }
+            if (event.type === 'done') {
+              setRunStatus(event.passed ? 'passed' : 'failed')
+            } else if (event.type === 'video' && event.url) {
+              setVideoUrl(event.url)
+            } else {
+              setRunLogs(prev => [...prev, { type: event.type, message: event.message ?? '' }])
+              setTimeout(() => logsEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
+            }
+          } catch { /* ignore malformed */ }
+        }
+      }
+    } catch (e) {
+      setRunLogs(prev => [...prev, { type: 'err', message: String(e) }])
+      setRunStatus('failed')
+    }
   }
 
   function handleResultChange(val: RunResult) {
@@ -198,6 +261,14 @@ export default function TCDetailPage() {
   const steps = Array.isArray(selectedTc?.steps) ? selectedTc.steps : []
   const matchedCode = selectedTc ? matchCode(selectedTc, codeFiles) : null
 
+  const TYPE_ORDER: TCType[] = ['auto', 'mixed', 'manual']
+  const displayTcs = tcs
+    .filter(tc => typeFilter === 'all' || tc.type === typeFilter)
+    .sort((a, b) => {
+      if (sortMode === 'type') return TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type)
+      return a.id - b.id
+    })
+
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
@@ -222,9 +293,38 @@ export default function TCDetailPage() {
 
           {/* 좌측: TC 목록 */}
           <div className="card" style={{ padding: 0, overflow: 'hidden', position: 'sticky', top: '16px' }}>
-            <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--gray-200)', background: 'var(--gray-50)' }}>
-              <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--gray-500)' }}>TC 목록 ({tcs.length})</span>
+            {/* 헤더 */}
+            <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--gray-200)', background: 'var(--gray-50)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--gray-500)' }}>
+                  TC 목록 ({displayTcs.length}{typeFilter !== 'all' ? `/${tcs.length}` : ''})
+                </span>
+              </div>
+              {/* 정렬 */}
+              <div style={{ display: 'flex', gap: '4px', marginBottom: '5px' }}>
+                <span style={{ fontSize: '10px', color: 'var(--gray-400)', alignSelf: 'center', marginRight: '2px' }}>정렬</span>
+                {([['id', 'TC순'], ['type', '유형별']] as const).map(([mode, label]) => (
+                  <button key={mode} onClick={() => setSortMode(mode)} style={{
+                    padding: '2px 7px', borderRadius: '4px', fontSize: '10px', cursor: 'pointer',
+                    border: `1px solid ${sortMode === mode ? 'var(--primary)' : 'var(--gray-200)'}`,
+                    background: sortMode === mode ? 'var(--primary)' : 'white',
+                    color: sortMode === mode ? 'white' : 'var(--gray-500)', fontWeight: sortMode === mode ? 600 : 400,
+                  }}>{label}</button>
+                ))}
+              </div>
+              {/* 유형 필터 */}
+              <div style={{ display: 'flex', gap: '4px' }}>
+                {([['all', '전체'], ['auto', '🤖자동'], ['mixed', '🔀혼합'], ['manual', '👤수동']] as const).map(([val, label]) => (
+                  <button key={val} onClick={() => setTypeFilter(val)} style={{
+                    padding: '2px 6px', borderRadius: '4px', fontSize: '10px', cursor: 'pointer',
+                    border: `1px solid ${typeFilter === val ? 'var(--primary)' : 'var(--gray-200)'}`,
+                    background: typeFilter === val ? 'var(--primary-light)' : 'white',
+                    color: typeFilter === val ? 'var(--primary)' : 'var(--gray-400)', fontWeight: typeFilter === val ? 600 : 400,
+                  }}>{label}</button>
+                ))}
+              </div>
             </div>
+
             {tcs.length === 0 ? (
               <div className="empty-state" style={{ padding: '24px 12px' }}>
                 <div className="empty-state-text" style={{ fontSize: '12px' }}>TC 없음</div>
@@ -232,9 +332,13 @@ export default function TCDetailPage() {
                   <Link href="/tc-list" style={{ color: 'var(--primary)', fontSize: '11px' }}>TC 생성하기</Link>
                 </div>
               </div>
+            ) : displayTcs.length === 0 ? (
+              <div className="empty-state" style={{ padding: '20px 12px' }}>
+                <div className="empty-state-text" style={{ fontSize: '12px' }}>해당 유형 없음</div>
+              </div>
             ) : (
-              <div style={{ maxHeight: 'calc(100vh - 200px)', overflowY: 'auto' }}>
-                {tcs.map(tc => {
+              <div style={{ maxHeight: 'calc(100vh - 260px)', overflowY: 'auto' }}>
+                {displayTcs.map(tc => {
                   const isSelected = selectedTc?.id === tc.id
                   const hasCode    = !!matchCode(tc, codeFiles)
                   return (
@@ -263,7 +367,10 @@ export default function TCDetailPage() {
                       <div style={{ fontSize: '11px', fontWeight: isSelected ? 600 : 400, color: isSelected ? 'var(--primary)' : '#374151', lineHeight: 1.3 }}>
                         {tc.title}
                       </div>
-                      <div style={{ fontSize: '10px', color: 'var(--gray-400)', marginTop: '2px' }}>{tc.module}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
+                        <span style={{ fontSize: '10px', color: TYPE_META[tc.type]?.color }}>{TYPE_META[tc.type]?.icon}</span>
+                        <span style={{ fontSize: '10px', color: 'var(--gray-400)' }}>{tc.module}</span>
+                      </div>
                     </div>
                   )
                 })}
@@ -439,8 +546,9 @@ export default function TCDetailPage() {
                   </div>
                 </div>
 
-                {/* 매칭된 테스트 코드 */}
-                <div>
+                {/* 매칭된 테스트 코드 + 실행 */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {/* 코드 뷰어 */}
                   <div style={{ background: '#1E1E2E', borderRadius: '10px', overflow: 'hidden' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid #313244' }}>
                       <div>
@@ -453,16 +561,33 @@ export default function TCDetailPage() {
                           </span>
                         )}
                       </div>
-                      {matchedCode && (
-                        <button
-                          onClick={() => handleCopy(matchedCode.content)}
-                          style={{ background: '#313244', color: '#CDD6F4', border: 'none', borderRadius: '4px', padding: '3px 8px', fontSize: '10px', cursor: 'pointer' }}
-                        >
-                          {copied ? '✅ 복사됨' : '복사'}
-                        </button>
-                      )}
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                        {matchedCode && (
+                          <>
+                            <button
+                              onClick={() => handleCopy(matchedCode.content)}
+                              style={{ background: '#313244', color: '#CDD6F4', border: 'none', borderRadius: '4px', padding: '3px 8px', fontSize: '10px', cursor: 'pointer' }}
+                            >
+                              {copied ? '✅ 복사됨' : '복사'}
+                            </button>
+                            <button
+                              onClick={runTest}
+                              disabled={runStatus === 'running'}
+                              style={{
+                                border: 'none', borderRadius: '4px', padding: '4px 10px', fontSize: '10px', cursor: runStatus === 'running' ? 'not-allowed' : 'pointer', fontWeight: 600,
+                                background: runStatus === 'passed' ? '#10B981' : runStatus === 'failed' ? '#EF4444' : '#4F46E5',
+                                color: 'white', display: 'flex', alignItems: 'center', gap: '4px',
+                              }}
+                            >
+                              {runStatus === 'running' ? (
+                                <><span style={{ width: '8px', height: '8px', borderRadius: '50%', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', animation: 'spin 0.8s linear infinite', display: 'inline-block' }} /> 실행 중</>
+                              ) : runStatus === 'passed' ? '✅ 통과' : runStatus === 'failed' ? '❌ 실패' : '▶ 테스트 실행'}
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
-                    <div style={{ minHeight: '300px', maxHeight: '500px', overflowY: 'auto', padding: matchedCode ? '0' : '40px 16px' }}>
+                    <div style={{ minHeight: '200px', maxHeight: '300px', overflowY: 'auto', padding: matchedCode ? '0' : '40px 16px' }}>
                       {matchedCode ? (
                         <pre style={{ margin: 0, padding: '14px', fontSize: '11px', lineHeight: 1.7, color: '#CDD6F4', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                           {matchedCode.content}
@@ -478,13 +603,65 @@ export default function TCDetailPage() {
                       )}
                     </div>
                     {matchedCode && (
-                      <div style={{ padding: '6px 14px', borderTop: '1px solid #313244', background: '#181825' }}>
+                      <div style={{ padding: '5px 14px', borderTop: '1px solid #313244', background: '#181825' }}>
                         <span style={{ fontSize: '10px', color: '#585B70' }}>
-                          TC-{String(selectedTc.id).padStart(3, '0')} 파일명 기준으로 자동 매칭됨
+                          TC-{String(selectedTc.id).padStart(3, '0')} 파일명 기준 자동 매칭
                         </span>
                       </div>
                     )}
                   </div>
+
+                  {/* 녹화 중 표시 / 영상 플레이어 */}
+                  {matchedCode && runStatus !== 'idle' && (
+                    <div style={{ background: '#0D0D0D', borderRadius: '10px', overflow: 'hidden', border: `2px solid ${runStatus === 'passed' ? '#10B981' : runStatus === 'failed' ? '#EF4444' : '#4F46E5'}` }}>
+                      {/* 헤더 */}
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 14px', background: '#111', borderBottom: '1px solid #1a1a1a' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          {runStatus === 'running' && (
+                            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#EF4444', display: 'inline-block', animation: 'pulse 1s ease-in-out infinite', boxShadow: '0 0 6px #EF4444' }} />
+                          )}
+                          <span style={{ fontSize: '11px', color: runStatus === 'passed' ? '#10B981' : runStatus === 'failed' ? '#EF4444' : '#CDD6F4', fontWeight: 600 }}>
+                            {runStatus === 'running' ? '● REC — 테스트 녹화 중...' : runStatus === 'passed' ? '✅ 테스트 통과' : '❌ 테스트 실패'}
+                          </span>
+                        </div>
+                        <button onClick={() => { setRunLogs([]); setRunStatus('idle'); setVideoUrl(null) }} style={{ background: 'none', border: 'none', color: '#555', cursor: 'pointer', fontSize: '12px' }}>✕</button>
+                      </div>
+
+                      {/* 영상 플레이어 */}
+                      {videoUrl ? (
+                        <div>
+                          <video
+                            src={videoUrl}
+                            controls
+                            autoPlay
+                            style={{ width: '100%', display: 'block', maxHeight: '360px', background: '#000' }}
+                          />
+                          <div style={{ padding: '8px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <span style={{ fontSize: '10px', color: '#585B70', fontFamily: 'monospace' }}>{videoUrl.split('/').pop()}</span>
+                            <a href={videoUrl} download style={{ fontSize: '10px', color: '#7C3AED', textDecoration: 'none' }}>⬇ 다운로드</a>
+                          </div>
+                        </div>
+                      ) : (
+                        /* 녹화 중 대기 화면 */
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 16px', gap: '16px' }}>
+                          <div style={{ position: 'relative', width: '64px', height: '64px' }}>
+                            <div style={{ width: '64px', height: '64px', borderRadius: '50%', border: '3px solid #313244', borderTopColor: '#4F46E5', animation: 'spin 1s linear infinite' }} />
+                            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '22px' }}>🎬</div>
+                          </div>
+                          <div style={{ textAlign: 'center' }}>
+                            <div style={{ color: '#CDD6F4', fontSize: '13px', fontWeight: 600, marginBottom: '6px' }}>Playwright 브라우저 실행 중</div>
+                            <div style={{ color: '#585B70', fontSize: '11px' }}>테스트 완료 후 영상이 표시됩니다</div>
+                          </div>
+                          {/* 최근 로그 한 줄 */}
+                          {runLogs.length > 0 && (
+                            <div style={{ fontFamily: 'monospace', fontSize: '10px', color: '#6B7280', background: '#1a1a1a', borderRadius: '6px', padding: '6px 12px', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {runLogs[runLogs.length - 1].message}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

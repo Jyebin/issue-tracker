@@ -272,6 +272,7 @@ body {
 @keyframes pipe-pulse-warn { 0%,100% { box-shadow: 0 0 0 0 rgba(245,158,11,.5); } 50% { box-shadow: 0 0 0 8px rgba(245,158,11,0); } }
 @keyframes pipe-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(79,70,229,.5); } 50% { box-shadow: 0 0 0 8px rgba(79,70,229,0); } }
 @keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.2; } }
 .pipe-body { flex: 1; padding: 4px 0 16px; min-width: 0; }
 .pipe-label { font-size: 13px; font-weight: 600; color: var(--gray-400); transition: color .3s; }
 .pipe-step.running .pipe-label { color: var(--primary); }
