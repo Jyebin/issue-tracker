@@ -3,8 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { loadPipeline } from '@/lib/pipelineStore'
-
-type Priority = 'critical' | 'high' | 'medium' | 'low'
+import MissingItemCard, { PRIORITY_META, type Priority, type SharedMissingItem } from '@/components/MissingItemCard'
 
 type MissingItem = {
   id: number
@@ -15,13 +14,6 @@ type MissingItem = {
   order_index: number
   answer: string | null
   answered_at: string | null
-}
-
-const PRIORITY_META: Record<Priority, { label: string; color: string; bg: string; dot: string }> = {
-  critical: { label: 'Critical', color: '#EF4444', bg: '#FEF2F2', dot: '🔴' },
-  high:     { label: 'High',     color: '#F97316', bg: '#FFF7ED', dot: '🟠' },
-  medium:   { label: 'Medium',   color: '#F59E0B', bg: '#FFFBEB', dot: '🟡' },
-  low:      { label: 'Low',      color: '#6B7280', bg: '#F9FAFB', dot: '⚪' },
 }
 
 export default function FormPage() {
@@ -262,160 +254,53 @@ export default function FormPage() {
 
       {error && <div className="alert alert-danger" style={{ marginBottom: '12px' }}>❌ {error}</div>}
 
-      {/* Form cards — Naver form style */}
+      {/* Form cards */}
       {!loading && items.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '20px' }}>
           {items.map((item, idx) => {
-            const p      = PRIORITY_META[item.priority]
-            const ans    = answers[item.id] ?? ''
-            const isSaved = saved[item.id]
-            const isSaving = saving[item.id]
-
             const suggestions: string[] = Array.isArray(item.suggestions)
               ? item.suggestions
-              : (typeof item.suggestions === 'string' ? JSON.parse(item.suggestions) : [])
-            const isCustom = showCustom[item.id] ?? false
+              : (typeof item.suggestions === 'string' ? JSON.parse(item.suggestions as string) : [])
+
+            const sharedItem: SharedMissingItem = {
+              id: item.id,
+              question: item.question,
+              description: item.description,
+              priority: item.priority,
+              suggestions,
+            }
 
             return (
-              <div key={item.id} className="card" style={{
-                borderLeft: `4px solid ${p.color}`,
-                transition: 'box-shadow .2s',
-              }}>
-                {/* Card header */}
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
-                  <div style={{
-                    width: '26px', height: '26px', borderRadius: '50%', flexShrink: 0,
-                    background: isSaved ? 'var(--success)' : 'var(--primary)',
-                    color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: '12px', fontWeight: 700,
-                  }}>
-                    {isSaved ? '✓' : idx + 1}
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '3px' }}>
-                      <span style={{
-                        fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '12px',
-                        background: p.bg, color: p.color, border: `1px solid ${p.color}30`,
-                      }}>
-                        {p.dot} {p.label}
-                      </span>
-                      {isSaved && (
-                        <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--success)' }}>✅ 저장됨</span>
-                      )}
-                    </div>
-                    <div style={{ fontSize: '14px', fontWeight: 700, color: '#1F2937', lineHeight: 1.5 }}>
-                      {item.question} <span style={{ color: '#EF4444', fontSize: '13px' }}>*</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Description */}
-                {item.description && (
-                  <div style={{
-                    fontSize: '12px', color: '#6B7280', lineHeight: 1.7,
-                    background: '#F9FAFB', borderRadius: '8px', padding: '10px 12px', marginBottom: '12px',
-                  }}>
-                    💡 {item.description}
-                  </div>
-                )}
-
-                {/* Suggestion chips */}
-                {suggestions.length > 0 && (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
-                    {suggestions.map((s, i) => {
-                      const isSelected = ans === s && !isCustom
-                      return (
-                        <button
-                          key={i}
-                          onClick={() => {
-                            setAnswers(prev => ({ ...prev, [item.id]: s }))
-                            setSaved(prev => ({ ...prev, [item.id]: false }))
-                            setShowCustom(prev => ({ ...prev, [item.id]: false }))
-                            saveAnswer(item.id, s)
-                          }}
-                          style={{
-                            padding: '8px 14px', borderRadius: '20px', fontSize: '12px', fontWeight: 600,
-                            cursor: 'pointer', transition: 'all .15s',
-                            border: `2px solid ${isSelected ? p.color : '#E5E7EB'}`,
-                            background: isSelected ? p.bg : 'white',
-                            color: isSelected ? p.color : '#374151',
-                          }}
-                        >
-                          {isSelected ? '✓ ' : ''}{s}
-                        </button>
-                      )
-                    })}
-                    <button
-                      onClick={() => {
-                        setShowCustom(prev => ({ ...prev, [item.id]: true }))
-                        setAnswers(prev => ({ ...prev, [item.id]: '' }))
-                        setSaved(prev => ({ ...prev, [item.id]: false }))
-                      }}
-                      style={{
-                        padding: '8px 14px', borderRadius: '20px', fontSize: '12px', fontWeight: 600,
-                        cursor: 'pointer', transition: 'all .15s',
-                        border: `2px solid ${isCustom ? '#6B7280' : '#E5E7EB'}`,
-                        background: isCustom ? '#F9FAFB' : 'white',
-                        color: '#6B7280',
-                      }}
-                    >
-                      ✏️ 기타
-                    </button>
-                  </div>
-                )}
-
-                {/* Answer textarea — suggestions 없거나 기타 선택 시 표시 */}
-                {(suggestions.length === 0 || isCustom) && (
-                <div style={{ position: 'relative' }}>
-                  <textarea
-                    value={ans}
-                    onChange={e => {
-                      setAnswers(prev => ({ ...prev, [item.id]: e.target.value }))
-                      setSaved(prev => ({ ...prev, [item.id]: false }))
-                    }}
-                    onBlur={() => saveAnswer(item.id, ans)}
-                    rows={4}
-                    placeholder="답변을 입력해주세요..."
-                    style={{
-                      width: '100%', boxSizing: 'border-box',
-                      padding: '12px 14px', fontSize: '13px', lineHeight: 1.7,
-                      border: `2px solid ${isSaved ? 'var(--success)' : ans.trim() ? 'var(--primary)' : '#E5E7EB'}`,
-                      borderRadius: '10px', resize: 'vertical', outline: 'none',
-                      fontFamily: 'inherit', color: '#1F2937', background: isSaved ? '#F0FDF4' : 'white',
-                      transition: 'border-color .2s, background .2s',
-                    }}
-                  />
-                  {isSaving && (
-                    <div style={{
-                      position: 'absolute', bottom: '10px', right: '10px',
-                      fontSize: '11px', color: 'var(--gray-400)', display: 'flex', alignItems: 'center', gap: '4px',
-                    }}>
-                      <div style={{ width: '10px', height: '10px', borderRadius: '50%', border: '2px solid #D1D5DB', borderTopColor: 'var(--primary)', animation: 'spin 1s linear infinite' }} />
-                      저장 중
-                    </div>
-                  )}
-                </div>
-                )}
-
-                {/* Manual save button — 기타 직접 입력 시에만 표시 */}
-                {(suggestions.length === 0 || isCustom) && (
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
-                  <button
-                    onClick={() => saveAnswer(item.id, ans)}
-                    disabled={!ans.trim() || isSaving}
-                    style={{
-                      fontSize: '12px', fontWeight: 600, padding: '6px 14px', borderRadius: '8px',
-                      border: '1px solid var(--primary)', cursor: ans.trim() ? 'pointer' : 'default',
-                      color: isSaved ? 'var(--success)' : 'var(--primary)',
-                      background: isSaved ? '#F0FDF4' : 'white', opacity: !ans.trim() ? 0.4 : 1,
-                      borderColor: isSaved ? 'var(--success)' : 'var(--primary)',
-                    }}
-                  >
-                    {isSaved ? '✅ 저장됨' : '저장'}
-                  </button>
-                </div>
-                )}
-              </div>
+              <MissingItemCard
+                key={item.id}
+                item={sharedItem}
+                index={idx}
+                answer={answers[item.id] ?? ''}
+                isAnswered={!!saved[item.id]}
+                isSaving={!!saving[item.id]}
+                isCustom={!!showCustom[item.id]}
+                onChipSelect={s => {
+                  setAnswers(prev => ({ ...prev, [item.id]: s }))
+                  setSaved(prev => ({ ...prev, [item.id]: false }))
+                  setShowCustom(prev => ({ ...prev, [item.id]: false }))
+                  saveAnswer(item.id, s)
+                }}
+                onChipEdit={() => {
+                  setShowCustom(prev => ({ ...prev, [item.id]: true }))
+                  setSaved(prev => ({ ...prev, [item.id]: false }))
+                }}
+                onCustomOpen={() => {
+                  setShowCustom(prev => ({ ...prev, [item.id]: true }))
+                  setAnswers(prev => ({ ...prev, [item.id]: '' }))
+                  setSaved(prev => ({ ...prev, [item.id]: false }))
+                }}
+                onAnswerChange={v => {
+                  setAnswers(prev => ({ ...prev, [item.id]: v }))
+                  setSaved(prev => ({ ...prev, [item.id]: false }))
+                }}
+                onBlur={() => saveAnswer(item.id, answers[item.id] ?? '')}
+                onSave={() => saveAnswer(item.id, answers[item.id] ?? '')}
+              />
             )
           })}
         </div>

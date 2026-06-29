@@ -2,6 +2,8 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import Link from 'next/link'
+import { savePipeline, loadPipeline, clearPipeline } from '@/lib/pipelineStore'
+import MissingItemCard, { PRIORITY_META, type Priority, type SharedMissingItem } from '@/components/MissingItemCard'
 
 // ── 타입 ──────────────────────────────────────────────
 type Phase =
@@ -53,9 +55,14 @@ export default function DashboardPage() {
   const fileInputRef  = useRef<HTMLInputElement>(null)
   const logRef        = useRef<HTMLDivElement>(null)
   const projectIdRef  = useRef<number | null>(null)
+  const logsRef       = useRef<{ t: string; m: string }[]>([])
+  const fileNameRef   = useRef('')
+  const tcCountRef    = useRef(0)
+  const codeCountRef  = useRef(0)
 
   const [phase, setPhase]           = useState<Phase>('idle')
   const [file, setFile]             = useState<File | null>(null)
+  const [restoredFileName, setRestoredFileName] = useState('')
   const [dragging, setDragging]     = useState(false)
   const [logs, setLogs]             = useState<{ t: string; m: string }[]>([])
   const [error, setError]           = useState('')
@@ -76,23 +83,58 @@ export default function DashboardPage() {
   const [done, setDone]                 = useState<DoneResult | null>(null)
 
   const addLog = useCallback((m: string, t = 'info') => {
-    setLogs(prev => [...prev, { m, t }])
+    const entry = { m, t }
+    logsRef.current = [...logsRef.current, entry]
+    setLogs(prev => [...prev, entry])
   }, [])
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
   }, [logs, testLogs])
 
+  // ── 마운트 시 pipelineStore에서 상태 복원 ─────────────
+  useEffect(() => {
+    const saved = loadPipeline()
+    if (!saved || !saved.projectId) return
+    const restorable: string[] = ['missing_items', 'done']
+    if (!restorable.includes(saved.phase)) return
+
+    projectIdRef.current = saved.projectId
+    fileNameRef.current  = saved.fileName
+    logsRef.current      = saved.logs ?? []
+    tcCountRef.current   = saved.tcCount ?? 0
+    codeCountRef.current = saved.codeCount ?? 0
+    setRestoredFileName(saved.fileName)
+    setPhase(saved.phase as Phase)
+    setLogs(saved.logs ?? [])
+    if (saved.missingItems) setMissingItems(saved.missingItems.map(it => ({ ...it, answer: undefined })))
+    if (saved.featureCount) setFeatureCount(saved.featureCount)
+    if (saved.tcCount)      setTcCount(saved.tcCount)
+    if (saved.codeCount)    setCodeCount(saved.codeCount)
+    if (saved.testLogs)     setTestLogs(saved.testLogs)
+    if (saved.results) {
+      setDone({
+        tcCount:    saved.results.tcCount,
+        codeCount:  saved.codeCount ?? 0,
+        passCount:  saved.results.passCount,
+        failCount:  saved.results.failCount,
+        issueCount: saved.results.issueCount,
+        videoUrls:  [],
+      })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // ── 파일 선택 ──────────────────────────────────────
   function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0]
-    if (f) setFile(f)
+    if (f) { fileNameRef.current = f.name; setFile(f) }
     e.target.value = ''
   }
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault(); setDragging(false)
     const f = e.dataTransfer.files?.[0]
-    if (f) setFile(f)
+    if (f) { fileNameRef.current = f.name; setFile(f) }
   }
 
   // ── STEP 0: 기획서 업로드 & 분석 ──────────────────
@@ -101,8 +143,11 @@ export default function DashboardPage() {
     setError('')
     setPhase('uploading')
     setLogs([])
+    logsRef.current = []
     setDone(null)
     projectIdRef.current = null
+    // 즉시 저장 — 업로드 탭에서 연동 감지 가능하도록
+    savePipeline({ status: 'paused', phase: 'uploading', fileName: file.name, projectId: null, stepStates: [], logs: [], elapsed: 0, savedAt: Date.now() })
     addLog('📄 기획서 업로드 중...')
 
     const fd = new FormData()
@@ -112,14 +157,29 @@ export default function DashboardPage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? '업로드 실패')
 
+      if (data.isSpec === false) {
+        addLog('❌ 기획서가 아닌 파일입니다.', 'warn')
+        setError('업로드한 파일이 기획서가 아닙니다. 기획서 파일을 업로드해주세요.')
+        setPhase('idle')
+        return
+      }
+
       projectIdRef.current = data.projectId
+      localStorage.setItem('testflow_project_id', String(data.projectId))
       setFeatureCount(data.featureCount)
       addLog(`✅ 기능 ${data.featureCount}개 감지`, 'ok')
 
       if (data.missingCount > 0) {
         addLog(`⚠️ 누락 항목 ${data.missingCount}건 발견 — 보완이 필요합니다`, 'warn')
-        await loadMissingItems(data.projectId)
+        const items = await loadMissingItems(data.projectId)
         setPhase('missing_items')
+        // 명시적 동기 저장 — 탭 이동 전 반드시 저장됨
+        savePipeline({
+          status: 'paused', phase: 'missing_items',
+          fileName: file.name, projectId: data.projectId,
+          stepStates: [], logs: logsRef.current, elapsed: 0, savedAt: Date.now(),
+          missingItems: items, featureCount: data.featureCount,
+        })
       } else {
         addLog('✅ 누락 항목 없음 — TC 생성 시작', 'ok')
         setPhase('generating_tc')
@@ -132,7 +192,7 @@ export default function DashboardPage() {
   }
 
   // ── 누락 항목 로드 ────────────────────────────────
-  async function loadMissingItems(pid: number) {
+  async function loadMissingItems(pid: number): Promise<MissingItem[]> {
     const res  = await fetch(`/api/projects/${pid}/missing-items`)
     const data = await res.json()
     const items: MissingItem[] = (data.items ?? []).map((it: MissingItem & { suggestions?: string | string[] }) => ({
@@ -145,6 +205,7 @@ export default function DashboardPage() {
     setMissingItems(items)
     setAnswers({})
     setCustomOpen({})
+    return items
   }
 
   // ── STEP 1: 누락 항목 답변 제출 ──────────────────
@@ -190,6 +251,7 @@ export default function DashboardPage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? 'TC 생성 실패')
       setTcCount(data.count)
+      tcCountRef.current = data.count
       addLog(`✅ TC ${data.count}개 생성 완료`, 'ok')
       setPhase('generating_code')
       await runGenerateCode()
@@ -210,6 +272,7 @@ export default function DashboardPage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? '코드 생성 실패')
       setCodeCount(data.count)
+      codeCountRef.current = data.count
       addLog(`✅ 코드 파일 ${data.count}개 생성 완료`, 'ok')
       setPhase('running_tests')
       await runAllTests()
@@ -280,15 +343,20 @@ export default function DashboardPage() {
       addLog(`▶️ 수행 완료 — ${finalPassCount} Pass / ${finalFailCount} Fail`, finalFailCount > 0 ? 'warn' : 'ok')
       if (finalIssueCount > 0) addLog(`📌 이슈 ${finalIssueCount}건 자동 등록`, 'ok')
 
-      setDone({
-        tcCount,
-        codeCount,
-        passCount: finalPassCount,
-        failCount: finalFailCount,
-        issueCount: finalIssueCount,
-        videoUrls: finalVideoUrls,
-      })
+      const doneResult = {
+        tcCount: tcCountRef.current, codeCount: codeCountRef.current,
+        passCount: finalPassCount, failCount: finalFailCount,
+        issueCount: finalIssueCount, videoUrls: finalVideoUrls,
+      }
+      setDone(doneResult)
       setPhase('done')
+      savePipeline({
+        status: 'done', phase: 'done',
+        fileName: fileNameRef.current, projectId: projectIdRef.current,
+        stepStates: [], logs: logsRef.current, elapsed: 0, savedAt: Date.now(),
+        tcCount: tcCountRef.current, codeCount: codeCountRef.current,
+        results: { tcCount: tcCountRef.current, passCount: finalPassCount, failCount: finalFailCount, issueCount: finalIssueCount },
+      })
     } catch (e) {
       addLog(`❌ 테스트 실행 실패: ${String(e)}`, 'warn')
       setError(String(e))
@@ -297,10 +365,13 @@ export default function DashboardPage() {
   }
 
   function reset() {
-    setPhase('idle'); setFile(null); setLogs([]); setTestLogs([])
+    setPhase('idle'); setFile(null); setRestoredFileName(''); setLogs([]); setTestLogs([])
     setError(''); setDone(null); setMissingItems([]); setAnswers({})
     setFeatureCount(0); setTcCount(0); setCodeCount(0)
-    projectIdRef.current = null
+    projectIdRef.current = null; logsRef.current = []; fileNameRef.current = ''
+    tcCountRef.current = 0; codeCountRef.current = 0
+    clearPipeline()
+    localStorage.removeItem('testflow_project_id')
   }
 
   const currentStep = phaseToStep(phase)
@@ -324,29 +395,32 @@ export default function DashboardPage() {
         {/* ── 좌측 ── */}
         <div>
           {/* 파일 */}
-          {!file ? (
-            <div
-              className="upload-zone"
-              style={{ marginBottom: '14px', minHeight: '110px', ...(dragging ? { borderColor: 'var(--primary)', background: 'var(--primary-light)' } : {}) }}
-              onClick={() => fileInputRef.current?.click()}
-              onDrop={onDrop}
-              onDragOver={e => { e.preventDefault(); setDragging(true) }}
-              onDragLeave={() => setDragging(false)}
-            >
-              <div className="upload-icon" style={{ fontSize: '26px' }}>📄</div>
-              <div className="upload-title" style={{ fontSize: '13px' }}>{dragging ? '여기에 놓으세요' : '기획서 업로드'}</div>
-              <div className="upload-sub">클릭하거나 파일을 드래그하세요</div>
-              <div className="upload-formats" style={{ marginTop: '8px' }}>
-                {['PDF', 'DOCX', 'XLSX', 'PNG', 'TXT'].map(f => <span key={f} className="format-tag">{f}</span>)}
+          {(() => {
+            const displayName = file?.name ?? restoredFileName
+            return !displayName ? (
+              <div
+                className="upload-zone"
+                style={{ marginBottom: '14px', minHeight: '110px', ...(dragging ? { borderColor: 'var(--primary)', background: 'var(--primary-light)' } : {}) }}
+                onClick={() => fileInputRef.current?.click()}
+                onDrop={onDrop}
+                onDragOver={e => { e.preventDefault(); setDragging(true) }}
+                onDragLeave={() => setDragging(false)}
+              >
+                <div className="upload-icon" style={{ fontSize: '26px' }}>📄</div>
+                <div className="upload-title" style={{ fontSize: '13px' }}>{dragging ? '여기에 놓으세요' : '기획서 업로드'}</div>
+                <div className="upload-sub">클릭하거나 파일을 드래그하세요</div>
+                <div className="upload-formats" style={{ marginTop: '8px' }}>
+                  {['PDF', 'DOCX', 'XLSX', 'PNG', 'TXT'].map(f => <span key={f} className="format-tag">{f}</span>)}
+                </div>
               </div>
-            </div>
-          ) : (
-            <div className="file-bar" style={{ marginBottom: '14px' }}>
-              <span style={{ fontSize: '18px' }}>📄</span>
-              <span className="file-bar-name">{file.name}</span>
-              {!isRunning && <button className="file-bar-x" onClick={reset}>×</button>}
-            </div>
-          )}
+            ) : (
+              <div className="file-bar" style={{ marginBottom: '14px' }}>
+                <span style={{ fontSize: '18px' }}>📄</span>
+                <span className="file-bar-name">{displayName}</span>
+                {!isRunning && <button className="file-bar-x" onClick={reset}>×</button>}
+              </div>
+            )
+          })()}
           <input ref={fileInputRef} type="file" accept=".pdf,.docx,.xlsx,.doc,.txt,.md,.png"
             style={{ display: 'none' }} onChange={onFileChange} />
 
@@ -388,76 +462,111 @@ export default function DashboardPage() {
           )}
 
           {/* ── MISSING ITEMS (사람 입력) ── */}
-          {phase === 'missing_items' && (
-            <div>
-              <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '10px', padding: '14px 16px', marginBottom: '14px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                  <span style={{ fontSize: '15px' }}>⏸</span>
-                  <span style={{ fontSize: '13px', fontWeight: 700, color: '#92400E' }}>누락 항목 보완</span>
-                  <span style={{ marginLeft: 'auto', fontSize: '11px', color: '#78350F' }}>{answeredCount}/{missingItems.length} 완료</span>
-                </div>
-                <p style={{ fontSize: '11px', color: '#78350F', margin: 0 }}>
-                  아래 항목을 모두 입력하면 TC 생성이 자동으로 이어집니다
-                </p>
-              </div>
+          {phase === 'missing_items' && (() => {
+            const totalMI  = missingItems.length
+            const progress = totalMI > 0 ? Math.round((answeredCount / totalMI) * 100) : 0
+            const countOf  = (p: Priority) => missingItems.filter(it => it.priority === p).length
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '14px', maxHeight: '420px', overflowY: 'auto' }}>
-                {missingItems.map((item) => {
-                  const answered = !!answers[item.id]?.trim()
-                  return (
-                    <div key={item.id} className="card" style={{ padding: '12px 14px', border: `1.5px solid ${answered ? '#6EE7B7' : 'var(--gray-200)'}`, transition: 'border-color .2s' }}>
-                      <div style={{ fontSize: '12px', fontWeight: 600, marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        {answered ? '✅' : '❓'} {item.question}
-                      </div>
-                      {item.description && (
-                        <div style={{ fontSize: '11px', color: 'var(--gray-400)', marginBottom: '8px' }}>{item.description}</div>
-                      )}
-                      {/* 제안 칩 */}
-                      {item.suggestions?.length > 0 && (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
-                          {item.suggestions.map((s) => (
-                            <button key={s} onClick={() => { setAnswer(item.id, s); setCustomOpen(p => ({ ...p, [item.id]: false })) }}
-                              style={{
-                                padding: '4px 10px', borderRadius: '20px', fontSize: '11px', cursor: 'pointer',
-                                border: `1.5px solid ${answers[item.id] === s ? 'var(--primary)' : 'var(--gray-200)'}`,
-                                background: answers[item.id] === s ? 'var(--primary)' : 'white',
-                                color: answers[item.id] === s ? 'white' : '#374151',
-                                fontWeight: answers[item.id] === s ? 600 : 400,
-                              }}>
-                              {s}
-                            </button>
-                          ))}
-                          <button onClick={() => setCustomOpen(p => ({ ...p, [item.id]: !p[item.id] }))}
-                            style={{ padding: '4px 10px', borderRadius: '20px', fontSize: '11px', cursor: 'pointer', border: '1.5px solid var(--gray-200)', background: customOpen[item.id] ? 'var(--gray-100)' : 'white', color: '#374151' }}>
-                            ✏️ 기타
-                          </button>
-                        </div>
-                      )}
-                      {/* 직접 입력 */}
-                      {(customOpen[item.id] || !item.suggestions?.length) && (
-                        <textarea
-                          className="form-textarea"
-                          style={{ minHeight: '60px', fontSize: '12px' }}
-                          placeholder="직접 입력하세요..."
-                          value={customOpen[item.id] ? (answers[item.id] ?? '') : (answers[item.id] ?? '')}
-                          onChange={e => setAnswer(item.id, e.target.value)}
-                        />
-                      )}
+            // normalize to SharedMissingItem
+            const sharedItems: SharedMissingItem[] = missingItems.map(it => ({
+              id: it.id,
+              question: it.question,
+              description: it.description || null,
+              priority: (['critical','high','medium','low'].includes(it.priority) ? it.priority : 'medium') as Priority,
+              suggestions: it.suggestions ?? [],
+            }))
+
+            return (
+              <div>
+                {/* Banner */}
+                <div style={{
+                  display: 'flex', alignItems: 'flex-start', gap: '12px',
+                  background: 'linear-gradient(135deg,#FEF3C7,#FDE68A)',
+                  border: '1px solid #F59E0B', borderRadius: '10px',
+                  padding: '14px 16px', marginBottom: '14px',
+                }}>
+                  <span style={{ fontSize: '20px', flexShrink: 0 }}>⏸</span>
+                  <div>
+                    <div style={{ fontSize: '13px', fontWeight: 700, color: '#78350F', marginBottom: '3px' }}>
+                      누락 항목 보완 필요
                     </div>
-                  )
-                })}
-              </div>
+                    <div style={{ fontSize: '11px', color: '#92400E', lineHeight: 1.7 }}>
+                      아래 항목을 모두 보완하면 TC 생성이 자동으로 이어집니다.
+                    </div>
+                  </div>
+                </div>
 
-              <button
-                className="btn btn-primary"
-                style={{ width: '100%', padding: '13px', fontSize: '14px', fontWeight: 700, opacity: allAnswered ? 1 : 0.5 }}
-                disabled={!allAnswered || submitting}
-                onClick={submitAnswers}
-              >
-                {submitting ? '저장 중...' : `✅ 보완 완료 (${answeredCount}/${missingItems.length}) — TC 생성 시작 →`}
-              </button>
-            </div>
-          )}
+                {/* Priority badges */}
+                <div style={{ display: 'flex', gap: '7px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                  {(['critical','high','medium','low'] as Priority[]).map(p =>
+                    countOf(p) > 0 && (
+                      <span key={p} style={{
+                        fontSize: '11px', fontWeight: 700, padding: '4px 10px', borderRadius: '20px',
+                        background: PRIORITY_META[p].bg, color: PRIORITY_META[p].color,
+                        border: `1px solid ${PRIORITY_META[p].color}30`,
+                      }}>
+                        {PRIORITY_META[p].dot} {PRIORITY_META[p].label} {countOf(p)}건
+                      </span>
+                    )
+                  )}
+                </div>
+
+                {/* Progress bar */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--gray-400)', whiteSpace: 'nowrap' }}>답변 진행률</span>
+                  <div style={{ flex: 1, height: '8px', background: '#E5E7EB', borderRadius: '4px', overflow: 'hidden' }}>
+                    <div style={{
+                      height: '100%', borderRadius: '4px', transition: 'width .4s',
+                      background: answeredCount === totalMI ? 'var(--success)' : 'var(--primary)',
+                      width: `${progress}%`,
+                    }} />
+                  </div>
+                  <span style={{
+                    fontSize: '12px', fontWeight: 700, whiteSpace: 'nowrap',
+                    color: answeredCount === totalMI ? 'var(--success)' : 'var(--primary)',
+                  }}>
+                    {answeredCount} / {totalMI}
+                  </span>
+                </div>
+
+                {/* Cards */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '14px', maxHeight: '460px', overflowY: 'auto' }}>
+                  {sharedItems.map((item, idx) => (
+                    <MissingItemCard
+                      key={item.id}
+                      item={item}
+                      index={idx}
+                      answer={answers[item.id] ?? ''}
+                      isAnswered={!!answers[item.id]?.trim()}
+                      isCustom={!!customOpen[item.id]}
+                      onChipSelect={s => {
+                        setAnswer(item.id, s)
+                        setCustomOpen(p => ({ ...p, [item.id]: false }))
+                      }}
+                      onChipEdit={() => setCustomOpen(p => ({ ...p, [item.id]: true }))}
+                      onCustomOpen={() => {
+                        setCustomOpen(p => ({ ...p, [item.id]: true }))
+                        setAnswer(item.id, '')
+                      }}
+                      onAnswerChange={v => setAnswer(item.id, v)}
+                    />
+                  ))}
+                </div>
+
+                {/* Submit */}
+                <button
+                  className="btn btn-primary"
+                  style={{ width: '100%', padding: '13px', fontSize: '14px', fontWeight: 700, opacity: allAnswered ? 1 : 0.5 }}
+                  disabled={!allAnswered || submitting}
+                  onClick={submitAnswers}
+                >
+                  {submitting
+                    ? (<><div style={{ width: '14px', height: '14px', borderRadius: '50%', border: '2px solid rgba(255,255,255,.3)', borderTopColor: 'white', animation: 'spin 1s linear infinite', display: 'inline-block', marginRight: '8px', verticalAlign: 'middle' }} />저장 중...</>)
+                    : `✅ 보완 완료 (${answeredCount}/${totalMI}) — TC 생성 시작 →`}
+                </button>
+              </div>
+            )
+          })()}
 
           {/* ── DONE ── */}
           {phase === 'done' && done && (

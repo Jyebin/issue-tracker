@@ -23,11 +23,19 @@ export async function PATCH(
   { params }: { params: { id: string } }
 ) {
   try {
-    const { status } = await req.json() as { status: string }
-    await pool.execute(
-      'UPDATE test_cases SET status = ? WHERE id = ?',
-      [status, parseInt(params.id)]
-    )
+    const body = await req.json() as { status?: string; expected?: string[] }
+    if (body.status !== undefined) {
+      await pool.execute(
+        'UPDATE test_cases SET status = ? WHERE id = ?',
+        [body.status, parseInt(params.id)]
+      )
+    }
+    if (body.expected !== undefined) {
+      await pool.execute(
+        'UPDATE test_cases SET expected = ? WHERE id = ?',
+        [JSON.stringify(body.expected), parseInt(params.id)]
+      )
+    }
     return NextResponse.json({ ok: true })
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 })

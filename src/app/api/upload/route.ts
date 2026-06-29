@@ -2,13 +2,20 @@ import { type NextRequest, NextResponse } from 'next/server'
 import type { ResultSetHeader } from 'mysql2'
 import pool from '@/lib/db'
 
-const ANALYSIS_PROMPT = `당신은 시니어 QA 엔지니어입니다. 이 기획서를 분석해서 테스트 케이스를 작성할 때 필요한데 누락된 정보를 찾아주세요.
+const ANALYSIS_PROMPT = `당신은 시니어 QA 엔지니어입니다. 먼저 이 문서가 소프트웨어/서비스 기획서인지 판단하세요.
 
-누락 항목을 찾고, 반드시 아래 JSON 형식으로만 응답하세요. 설명이나 다른 텍스트 없이 JSON만 출력하세요.
+기획서란 기능 요구사항, 사용자 시나리오, 화면 설계, 비즈니스 로직 등을 포함하는 문서입니다.
+기획서가 아닌 예시: 이력서, 논문, 소설, 단순 메모, 영수증, 코드 파일, 이미지만 있는 파일 등.
+
+기획서가 아니라고 판단되면 반드시 아래 JSON만 출력하세요:
+{"isSpec": false}
+
+기획서가 맞다면 테스트 케이스 작성에 필요한 누락 정보를 찾아 반드시 아래 JSON 형식으로만 응답하세요. 설명이나 다른 텍스트 없이 JSON만 출력하세요.
 priority 값은 반드시 "critical", "high", "medium", "low" 중 하나의 문자열이어야 합니다.
 suggestions는 해당 질문에 대한 현실적인 답변 후보 3개를 짧고 명확하게 작성하세요.
 
 {
+  "isSpec": true,
   "featureCount": 8,
   "missingItems": [
     {
@@ -20,7 +27,7 @@ suggestions는 해당 질문에 대한 현실적인 답변 후보 3개를 짧고
   ]
 }`
 
-function parseClaudeJson(raw: string): { featureCount: number; missingItems: { question: string; description: string; priority: string }[] } {
+function parseClaudeJson(raw: string): { isSpec?: boolean; featureCount: number; missingItems: { question: string; description: string; priority: string }[] } {
   const stripped = raw.replace(/```[\w]*\n?/g, '').trim()
   const start = stripped.indexOf('{')
   const end   = stripped.lastIndexOf('}')
@@ -41,7 +48,7 @@ export async function POST(req: NextRequest) {
     const fileName = file.name
     const ext      = fileName.split('.').pop()?.toLowerCase() ?? ''
 
-    const apiKey = process.env.ANTHROPIC_API_KEY
+    const apiKey = process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN
 
     // ── mock 모드 (API 키 없음) ───────────────────────────────────────
     if (!apiKey) {
@@ -84,7 +91,10 @@ export async function POST(req: NextRequest) {
 
     // ── Claude API 분석 ──────────────────────────────────────────────
     const Anthropic = (await import('@anthropic-ai/sdk')).default
-    const client    = new Anthropic({ apiKey })
+    const client    = new Anthropic({
+      apiKey,
+      ...(process.env.ANTHROPIC_BASE_URL ? { baseURL: process.env.ANTHROPIC_BASE_URL } : {}),
+    })
 
     let extractedText = ''
     let analysisContent: Parameters<typeof client.messages.create>[0]['messages'][0]['content']
@@ -130,12 +140,16 @@ export async function POST(req: NextRequest) {
 
     const raw = msg.content[0].type === 'text' ? msg.content[0].text.trim() : '{}'
 
-    let parsed: { featureCount: number; missingItems: { question: string; description: string; priority: string; suggestions?: string[] }[] }
+    let parsed: { isSpec?: boolean; featureCount: number; missingItems: { question: string; description: string; priority: string; suggestions?: string[] }[] }
     try {
       parsed = parseClaudeJson(raw)
     } catch (parseErr) {
       console.error('[upload] JSON 파싱 실패:', raw.slice(0, 300), parseErr)
       parsed = { featureCount: 0, missingItems: [] }
+    }
+
+    if (parsed.isSpec === false) {
+      return NextResponse.json({ isSpec: false })
     }
 
     // ── DB 저장 ──────────────────────────────────────────────────────

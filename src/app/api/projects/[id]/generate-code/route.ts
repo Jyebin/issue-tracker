@@ -49,7 +49,10 @@ test.describe('자동 생성 테스트', () => {
     }
 
     const Anthropic = (await import('@anthropic-ai/sdk')).default
-    const client    = new Anthropic({ apiKey })
+    const client    = new Anthropic({
+      apiKey,
+      ...(process.env.ANTHROPIC_BASE_URL ? { baseURL: process.env.ANTHROPIC_BASE_URL } : {}),
+    })
 
     let count = 0
     for (const tc of tcs) {

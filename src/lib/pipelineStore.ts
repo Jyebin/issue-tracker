@@ -3,14 +3,28 @@
 export type StepState    = 'idle' | 'running' | 'done' | 'needs_input'
 export type PipelineStatus = 'paused' | 'done'
 
+export type StoredMissingItem = {
+  id: number
+  question: string
+  description: string
+  priority: string
+  suggestions: string[]
+}
+
 export type PipelineResult = {
   status:    PipelineStatus
+  phase:     string
   fileName:  string
   projectId: number | null
   stepStates: StepState[]
   logs:      { m: string; t: string }[]
   elapsed:   number
   savedAt:   number
+  missingItems?: StoredMissingItem[]
+  featureCount?: number
+  tcCount?:     number
+  codeCount?:   number
+  testLogs?:    { m: string; t: string }[]
   results?: {
     tcCount:    number
     passCount:  number

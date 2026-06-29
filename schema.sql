@@ -53,3 +53,45 @@ CREATE TABLE IF NOT EXISTS final_specs (
   created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
+
+-- 테스트 케이스
+CREATE TABLE IF NOT EXISTS test_cases (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  project_id  INT NOT NULL,
+  title       VARCHAR(500) NOT NULL,
+  module      VARCHAR(255),
+  type        VARCHAR(100),
+  priority    ENUM('critical','high','medium','low') DEFAULT 'medium',
+  status      ENUM('pending','pass','fail') DEFAULT 'pending',
+  steps       JSON,
+  expected    TEXT,
+  created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+-- Playwright 테스트 코드
+CREATE TABLE IF NOT EXISTS test_code (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  project_id  INT NOT NULL,
+  file_name   VARCHAR(255) NOT NULL,
+  content     LONGTEXT,
+  created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+-- 이슈
+CREATE TABLE IF NOT EXISTS issues (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  project_id  INT NOT NULL,
+  tc_id       INT,
+  title       VARCHAR(500) NOT NULL,
+  priority    ENUM('critical','high','medium','low') DEFAULT 'medium',
+  module      VARCHAR(255),
+  description TEXT,
+  status      ENUM('open','in_progress','resolved') DEFAULT 'open',
+  created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+-- missing_items suggestions 컬럼 (없을 경우 추가)
+-- ALTER TABLE missing_items ADD COLUMN IF NOT EXISTS suggestions JSON NULL AFTER priority;
