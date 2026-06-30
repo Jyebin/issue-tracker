@@ -95,3 +95,40 @@ CREATE TABLE IF NOT EXISTS issues (
 
 -- missing_items suggestions 컬럼 (없을 경우 추가)
 -- ALTER TABLE missing_items ADD COLUMN IF NOT EXISTS suggestions JSON NULL AFTER priority;
+
+-- 테스트 플랜 (여러 사이클을 묶는 계획 단위)
+CREATE TABLE IF NOT EXISTS test_plans (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  project_id  INT NOT NULL,
+  name        VARCHAR(255) NOT NULL,
+  created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_project (project_id),
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+-- 테스트 사이클 (플랜 하위 실행 단위)
+CREATE TABLE IF NOT EXISTS test_cycles (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  plan_id     INT NOT NULL,
+  project_id  INT NOT NULL,
+  name        VARCHAR(255) NOT NULL,
+  status      ENUM('not_started','in_progress','done') DEFAULT 'not_started',
+  created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_plan    (plan_id),
+  INDEX idx_project (project_id),
+  FOREIGN KEY (plan_id)    REFERENCES test_plans(id)  ON DELETE CASCADE,
+  FOREIGN KEY (project_id) REFERENCES projects(id)    ON DELETE CASCADE
+);
+
+-- 사이클 내 TC 실행 항목
+CREATE TABLE IF NOT EXISTS test_cycle_cases (
+  id           INT AUTO_INCREMENT PRIMARY KEY,
+  cycle_id     INT NOT NULL,
+  test_case_id INT NOT NULL,
+  status       ENUM('pending','pass','fail','na') DEFAULT 'pending',
+  executed_at  TIMESTAMP NULL,
+  UNIQUE KEY uq_cycle_case (cycle_id, test_case_id),
+  INDEX idx_cycle (cycle_id),
+  FOREIGN KEY (cycle_id)     REFERENCES test_cycles(id)  ON DELETE CASCADE,
+  FOREIGN KEY (test_case_id) REFERENCES test_cases(id)   ON DELETE CASCADE
+);
