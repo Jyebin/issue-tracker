@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, Suspense } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 
@@ -49,7 +49,7 @@ function matchCode(tc: TestCase, codeFiles: CodeFile[]): CodeFile | null {
   return codeFiles.find(f => f.file_name.includes(tcTag)) ?? null
 }
 
-export default function TCDetailPage() {
+function TCDetailPageContent() {
   const searchParams = useSearchParams()
 
   const [projectId, setProjectId]     = useState<number | null>(null)
@@ -669,5 +669,14 @@ export default function TCDetailPage() {
         </div>
       )}
     </>
+  )
+}
+
+
+export default function TCDetailPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: '40px', textAlign: 'center', color: '#94A3B8', fontSize: '14px' }}>로딩 중...</div>}>
+      <TCDetailPageContent />
+    </Suspense>
   )
 }

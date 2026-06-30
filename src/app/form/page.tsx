@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { loadPipeline } from '@/lib/pipelineStore'
 import MissingItemCard, { PRIORITY_META, type Priority, type SharedMissingItem } from '@/components/MissingItemCard'
@@ -16,7 +16,7 @@ type MissingItem = {
   answered_at: string | null
 }
 
-export default function FormPage() {
+function FormPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
 
@@ -341,5 +341,14 @@ export default function FormPage() {
         </div>
       )}
     </>
+  )
+}
+
+
+export default function FormPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: '40px', textAlign: 'center', color: '#94A3B8', fontSize: '14px' }}>로딩 중...</div>}>
+      <FormPageContent />
+    </Suspense>
   )
 }
