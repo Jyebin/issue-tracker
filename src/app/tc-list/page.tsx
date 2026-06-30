@@ -151,6 +151,15 @@ function TCListPageContent() {
   const [cycleLoading, setCycleLoading]   = useState(false)
   const [cycleTC, setCycleTC]             = useState<CycleCase | null>(null)
 
+  // Add TC to cycle panel
+  const [addTCToCycle, setAddTCToCycle]         = useState<TestCycle | null>(null)
+  const [addFromRun, setAddFromRun]             = useState(false)
+  const [addBrowseParent, setAddBrowseParent]   = useState<string | null>(null)
+  const [addBrowseSub, setAddBrowseSub]         = useState<string | null>(null)
+  const [addSelectIds, setAddSelectIds]         = useState<Set<number>>(new Set())
+  const [existingCycleIds, setExistingCycleIds] = useState<Set<number>>(new Set())
+  const [addingCycleTCs, setAddingCycleTCs]     = useState(false)
+
   useEffect(() => {
     const urlPid = searchParams.get('projectId')
     const pid = urlPid
@@ -292,6 +301,48 @@ function TCListPageContent() {
       const data = await res.json()
       setCycleItems(data.cases ?? [])
     } finally { setCycleLoading(false) }
+  }
+
+  async function openAddTCPanel(cycle: TestCycle, fromRun = false) {
+    try {
+      const res  = await fetch(`/api/test-cycles/${cycle.id}/cases`)
+      const data = await res.json()
+      const existing = new Set<number>((data.cases ?? []).map((c: CycleCase) => c.test_case_id as number))
+      setExistingCycleIds(existing)
+    } catch { setExistingCycleIds(new Set()) }
+    setAddTCToCycle(cycle)
+    setAddFromRun(fromRun)
+    setAddSelectIds(new Set())
+    setAddBrowseParent(null)
+    setAddBrowseSub(null)
+  }
+
+  async function addSelectedToCycle() {
+    if (!addTCToCycle || !addSelectIds.size) return
+    setAddingCycleTCs(true)
+    try {
+      await fetch(`/api/test-cycles/${addTCToCycle.id}/cases`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tcIds: Array.from(addSelectIds as Set<number>) }),
+      })
+      setExistingCycleIds(prev => new Set(Array.from(prev).concat(Array.from(addSelectIds as Set<number>))))
+      setAddSelectIds(new Set())
+      if (activeCycle?.id === addTCToCycle.id) {
+        const res  = await fetch(`/api/test-cycles/${addTCToCycle.id}/cases`)
+        const data = await res.json()
+        setCycleItems(data.cases ?? [])
+      }
+      if (projectId) await fetchPlans(projectId)
+    } finally { setAddingCycleTCs(false) }
+  }
+
+  function toggleAddTC(tcId: number) {
+    if (existingCycleIds.has(tcId)) return
+    setAddSelectIds(prev => {
+      const next = new Set(prev)
+      if (next.has(tcId)) next.delete(tcId); else next.add(tcId)
+      return next
+    })
   }
 
   function toggleTC(tcId: number) {
@@ -521,6 +572,10 @@ function TCListPageContent() {
                         style={{ fontSize: '11px', fontWeight: 600, padding: '4px 11px', borderRadius: '6px', border: '1px solid #3B82F6', background: '#EFF6FF', cursor: 'pointer', color: '#2563EB', flexShrink: 0, whiteSpace: 'nowrap' }}>
                         실행 →
                       </button>
+                      <button onClick={e => { e.stopPropagation(); openAddTCPanel(cycle, false) }}
+                        style={{ fontSize: '11px', fontWeight: 600, padding: '4px 11px', borderRadius: '6px', border: '1px solid #10B981', background: '#ECFDF5', cursor: 'pointer', color: '#059669', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                        + TC
+                      </button>
                     </div>
                   )
                 })}
@@ -581,6 +636,173 @@ function TCListPageContent() {
     )
   }
 
+  // ② Add TC to cycle panel
+  if (addTCToCycle) {
+    const cycleName = addTCToCycle.name
+    const existingN = existingCycleIds.size
+    const newlyN    = addSelectIds.size
+
+    // Navigation inside the add panel
+    const addSubMap = addBrowseParent ? (parentMap[addBrowseParent] ?? {}) : {}
+    const addSubList = Object.keys(addSubMap)
+
+    return (
+      <>
+        {/* Breadcrumb */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '16px', fontSize: '13px', flexWrap: 'wrap' }}>
+          <button onClick={() => { setAddTCToCycle(null); setAddBrowseParent(null); setAddBrowseSub(null) }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', fontWeight: 600, padding: 0 }}>
+            🧪 TC 목록
+          </button>
+          {addFromRun && activeCycle && (
+            <><span style={{ color: '#CBD5E1' }}>›</span>
+              <button onClick={() => { setAddTCToCycle(null); setAddBrowseParent(null); setAddBrowseSub(null) }}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', fontWeight: 600, padding: 0 }}>
+                📋 {activeCycle.name}
+              </button>
+            </>
+          )}
+          <span style={{ color: '#CBD5E1' }}>›</span>
+          <span style={{ fontWeight: 600, color: '#059669' }}>+ TC 추가</span>
+          {addBrowseParent && (
+            <><span style={{ color: '#CBD5E1' }}>›</span>
+              <button onClick={() => setAddBrowseSub(null)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: addBrowseSub ? 'var(--primary)' : '#1E293B', fontWeight: 600, padding: 0 }}>
+                📁 {addBrowseParent}
+              </button>
+            </>
+          )}
+          {addBrowseSub && (
+            <><span style={{ color: '#CBD5E1' }}>›</span>
+              <span style={{ fontWeight: 600, color: '#1E293B' }}>📋 {addBrowseSub}</span>
+            </>
+          )}
+        </div>
+
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: '14px', gap: '12px' }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700, fontSize: '16px', color: '#1E293B' }}>📋 {cycleName}에 TC 추가</div>
+            <div style={{ fontSize: '11px', color: '#94A3B8', marginTop: '3px' }}>
+              이미 추가됨 {existingN}개
+              {newlyN > 0 && <span style={{ color: '#059669', fontWeight: 700, marginLeft: '8px' }}>· 새로 선택 {newlyN}개</span>}
+            </div>
+          </div>
+          <button onClick={() => { setAddTCToCycle(null); setAddBrowseParent(null); setAddBrowseSub(null) }}
+            className="btn btn-secondary btn-sm">← 뒤로</button>
+        </div>
+
+        {/* Floating add bar */}
+        {addSelectIds.size > 0 && (
+          <div style={{ position: 'sticky', top: '8px', zIndex: 10, background: '#059669', color: 'white', borderRadius: '10px', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px', boxShadow: '0 4px 20px rgba(5,150,105,.35)' }}>
+            <span style={{ flex: 1, fontSize: '13px', fontWeight: 600 }}>✓ {addSelectIds.size}개 선택됨</span>
+            <button onClick={addSelectedToCycle} disabled={addingCycleTCs}
+              style={{ fontSize: '13px', fontWeight: 700, padding: '7px 18px', borderRadius: '7px', border: 'none', background: 'white', color: '#059669', cursor: 'pointer', opacity: addingCycleTCs ? 0.7 : 1 }}>
+              {addingCycleTCs ? '추가 중...' : `사이클에 추가 →`}
+            </button>
+            <button onClick={() => setAddSelectIds(new Set())}
+              style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '6px', border: '1px solid rgba(255,255,255,.4)', background: 'transparent', color: 'rgba(255,255,255,.8)', cursor: 'pointer' }}>
+              선택 해제
+            </button>
+          </div>
+        )}
+
+        {/* Level 3: TC list */}
+        {addBrowseParent && addBrowseSub ? (
+          <div style={{ border: '1px solid var(--gray-200)', borderRadius: '10px', overflow: 'hidden' }}>
+            {(addSubMap[addBrowseSub] ?? []).map((tc, idx) => {
+              const typeMeta = TYPE_META[tc.type]         ?? TYPE_META.manual
+              const priMeta  = PRIORITY_META[tc.priority] ?? PRIORITY_META.medium
+              const isExisting = existingCycleIds.has(tc.id)
+              const isSelected = addSelectIds.has(tc.id)
+              const isLast = idx === (addSubMap[addBrowseSub] ?? []).length - 1
+              return (
+                <div key={tc.id} onClick={() => toggleAddTC(tc.id)}
+                  style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 16px', background: isExisting ? '#F0FDF4' : isSelected ? '#EFF6FF' : 'white', borderBottom: isLast ? 'none' : '1px solid #F1F5F9', cursor: isExisting ? 'default' : 'pointer', borderLeft: isExisting ? '3px solid #10B981' : isSelected ? '3px solid #3B82F6' : '3px solid transparent', transition: 'background .1s' }}>
+                  <div style={{ width: '18px', height: '18px', borderRadius: '4px', border: `2px solid ${isExisting ? '#10B981' : isSelected ? '#3B82F6' : '#D1D5DB'}`, background: isExisting ? '#10B981' : isSelected ? '#3B82F6' : 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    {(isExisting || isSelected) && <span style={{ color: 'white', fontSize: '11px', fontWeight: 700 }}>✓</span>}
+                  </div>
+                  <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#F1F5F9', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 700, color: '#64748B', flexShrink: 0 }}>
+                    {parseSteps(tc.steps).length}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: '13px', color: '#1E293B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tc.title}</div>
+                    <div style={{ fontSize: '10px', color: '#94A3B8', marginTop: '2px', fontFamily: 'monospace' }}>TC-{String(tc.id).padStart(3, '0')}</div>
+                  </div>
+                  <span style={{ fontSize: '11px', fontWeight: 600, padding: '2px 8px', borderRadius: '8px', background: typeMeta.bg, color: typeMeta.color, border: `1px solid ${typeMeta.border}`, flexShrink: 0 }}>{typeMeta.icon}</span>
+                  <span style={{ fontSize: '11px', fontWeight: 700, color: priMeta.color, flexShrink: 0 }}>{priMeta.dot} {priMeta.label}</span>
+                  {isExisting
+                    ? <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 9px', borderRadius: '8px', background: '#D1FAE5', color: '#059669', flexShrink: 0, whiteSpace: 'nowrap' }}>✓ 이미 추가됨</span>
+                    : tcNeedsReview(tc) && <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '8px', background: '#FEF3C7', color: '#92400E', flexShrink: 0 }}>⚠️ 검토 필요</span>
+                  }
+                </div>
+              )
+            })}
+          </div>
+
+        ) : addBrowseParent && !addBrowseSub ? (
+          // Level 2: sub list
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {addSubList.map(sub => {
+              const subTCs  = addSubMap[sub]
+              const existN  = subTCs.filter(t => existingCycleIds.has(t.id)).length
+              const selN    = subTCs.filter(t => addSelectIds.has(t.id)).length
+              const revN    = subTCs.filter(tcNeedsReview).length
+              return (
+                <div key={sub} onClick={() => setAddBrowseSub(sub)}
+                  style={{ border: '1px solid var(--gray-200)', borderRadius: '10px', padding: '14px 18px', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '12px', transition: 'all .15s' }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--primary)' }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--gray-200)' }}>
+                  <div style={{ width: '36px', height: '36px', borderRadius: '8px', background: '#F1F5F9', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 }}>📋</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: '14px', color: '#1E293B', marginBottom: '4px' }}>{sub}</div>
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '11px', color: '#6B7280' }}>TC {subTCs.length}개</span>
+                      {existN > 0 && <span style={{ fontSize: '11px', padding: '1px 7px', borderRadius: '8px', background: '#D1FAE5', color: '#059669', fontWeight: 700 }}>✓ 추가됨 {existN}</span>}
+                      {selN  > 0 && <span style={{ fontSize: '11px', padding: '1px 7px', borderRadius: '8px', background: '#EFF6FF', color: '#2563EB', fontWeight: 700 }}>선택 {selN}</span>}
+                      {revN  > 0 && <span style={{ fontSize: '11px', padding: '1px 7px', borderRadius: '8px', background: '#FEF3C7', color: '#92400E', fontWeight: 600 }}>⚠️ 검토 {revN}</span>}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: '16px', color: '#CBD5E1' }}>›</span>
+                </div>
+              )
+            })}
+          </div>
+
+        ) : (
+          // Level 1: parent list
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {parentList.map(parent => {
+              const subs   = parentMap[parent]
+              const allTCs = Object.values(subs).flat()
+              const existN = allTCs.filter(t => existingCycleIds.has(t.id)).length
+              const selN   = allTCs.filter(t => addSelectIds.has(t.id)).length
+              const revN   = allTCs.filter(tcNeedsReview).length
+              return (
+                <div key={parent} onClick={() => setAddBrowseParent(parent)}
+                  style={{ border: '1px solid var(--gray-200)', borderRadius: '12px', padding: '16px 18px', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '14px', transition: 'all .15s' }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--primary)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 2px 12px rgba(79,70,229,.1)' }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--gray-200)'; (e.currentTarget as HTMLElement).style.boxShadow = 'none' }}>
+                  <div style={{ width: '44px', height: '44px', borderRadius: '12px', background: 'var(--primary-light)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '22px', flexShrink: 0 }}>📁</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: '15px', color: '#1E293B', marginBottom: '5px' }}>{parent}</div>
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '11px', color: '#6B7280' }}>TC {allTCs.length}개</span>
+                      {existN > 0 && <span style={{ fontSize: '11px', padding: '1px 7px', borderRadius: '8px', background: '#D1FAE5', color: '#059669', fontWeight: 700 }}>✓ 추가됨 {existN}</span>}
+                      {selN  > 0 && <span style={{ fontSize: '11px', padding: '1px 7px', borderRadius: '8px', background: '#EFF6FF', color: '#2563EB', fontWeight: 700 }}>선택 {selN}</span>}
+                      {revN  > 0 && <span style={{ fontSize: '11px', padding: '1px 7px', borderRadius: '8px', background: '#FEF3C7', color: '#92400E', fontWeight: 600 }}>⚠️ {revN}</span>}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: '18px', color: '#CBD5E1' }}>›</span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </>
+    )
+  }
+
   // ② Cycle execution view
   if (activeCycle) {
     const plan = testPlans.find(p => p.cycles.some(c => c.id === activeCycle.id))
@@ -592,6 +814,7 @@ function TCListPageContent() {
         loading={cycleLoading}
         onBack={() => { setActiveCycle(null); setCycleItems([]) }}
         onRunTC={setCycleTC}
+        onAddTC={() => openAddTCPanel(activeCycle, true)}
         onStatusChange={(itemId, status) =>
           setCycleItems(prev => prev.map(i => i.id === itemId ? { ...i, cycle_status: status } : i))
         }
@@ -833,12 +1056,13 @@ export default function TCListPage() {
 // CycleRunView — Pass/Fail 기록은 여기서만
 // ═══════════════════════════════════════════════════════════════════════
 function CycleRunView({
-  cycle, planName, items, loading, onBack, onRunTC, onStatusChange,
+  cycle, planName, items, loading, onBack, onRunTC, onAddTC, onStatusChange,
 }: {
   cycle: TestCycle; planName?: string
   items: CycleCase[]; loading: boolean
   onBack: () => void
   onRunTC: (item: CycleCase) => void
+  onAddTC: () => void
   onStatusChange: (itemId: number, status: StepStatus) => void
 }) {
   const passN  = items.filter(i => i.cycle_status === 'pass').length
@@ -864,7 +1088,13 @@ function CycleRunView({
             <span style={{ fontSize: '11px', color: '#64748B' }}>{items.length}개 TC</span>
           </div>
         </div>
-        <button className="btn btn-secondary btn-sm" onClick={onBack}>← 뒤로</button>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button onClick={onAddTC}
+            style={{ fontSize: '12px', fontWeight: 600, padding: '6px 14px', borderRadius: '7px', border: '1px solid #10B981', background: '#ECFDF5', cursor: 'pointer', color: '#059669', whiteSpace: 'nowrap' }}>
+            + TC 추가
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={onBack}>← 뒤로</button>
+        </div>
       </div>
 
       {items.length > 0 && (
