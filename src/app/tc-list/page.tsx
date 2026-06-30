@@ -143,11 +143,6 @@ function TCListPageContent() {
   const [cycleLoading, setCycleLoading] = useState(false)
   const [cycleTC, setCycleTC]           = useState<CycleCase | null>(null)
 
-  // Cycle bulk-select
-  const [selCycleIds, setSelCycleIds]   = useState<Set<number>>(new Set())
-  const lastCycleIdxRef                 = useRef<number | null>(null)
-  const [bulkActing, setBulkActing]     = useState(false)
-
   // Add TC to cycle panel
   const [addTCToCycle, setAddTCToCycle]         = useState<TestCycle | null>(null)
   const [addFromRun, setAddFromRun]             = useState(false)
@@ -252,7 +247,7 @@ function TCListPageContent() {
     } finally { setCreatingCycle(false) }
   }
   async function openCycleRun(cycle: TestCycle) {
-    setActiveCycle(cycle); setCycleLoading(true); setSelCycleIds(new Set()); lastCycleIdxRef.current = null
+    setActiveCycle(cycle); setCycleLoading(true)
     try { const d = await (await fetch(`/api/test-cycles/${cycle.id}/cases`)).json(); setCycleItems(d.cases ?? []) }
     finally { setCycleLoading(false) }
   }
@@ -280,41 +275,6 @@ function TCListPageContent() {
       }
       if (projectId) await fetchPlans(projectId)
     } finally { setAddingCycleTCs(false) }
-  }
-
-  // ── Cycle bulk select helpers ──────────────────────────────────────
-  function handleCycleCaseClick(itemId: number, flatIdx: number, shiftKey: boolean) {
-    if (shiftKey && lastCycleIdxRef.current !== null) {
-      const lo = Math.min(lastCycleIdxRef.current, flatIdx)
-      const hi = Math.max(lastCycleIdxRef.current, flatIdx)
-      const rangeIds = cycleItems.slice(lo, hi + 1).map(i => i.id)
-      setSelCycleIds(prev => new Set(Array.from(prev).concat(rangeIds)))
-    } else {
-      setSelCycleIds(prev => { const n = new Set(prev); n.has(itemId) ? n.delete(itemId) : n.add(itemId); return n })
-      lastCycleIdxRef.current = flatIdx
-    }
-  }
-  function toggleModuleGroup(ids: number[], allSelected: boolean) {
-    setSelCycleIds(prev => {
-      const n = new Set(prev)
-      if (allSelected) ids.forEach(id => n.delete(id)); else ids.forEach(id => n.add(id))
-      return n
-    })
-  }
-  async function bulkUpdateStatus(status: StepStatus) {
-    if (!selCycleIds.size) return
-    setBulkActing(true)
-    try {
-      await Promise.all(Array.from(selCycleIds as Set<number>).map(id =>
-        fetch(`/api/test-cycle-cases/${id}`, {
-          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status }),
-        })
-      ))
-      setCycleItems(prev => prev.map(i => (selCycleIds as Set<number>).has(i.id) ? { ...i, cycle_status: status } : i))
-      setSelCycleIds(new Set())
-      if (projectId) await fetchPlans(projectId)
-    } finally { setBulkActing(false) }
   }
 
   function toggleAddTC(tcId: number) {
@@ -636,9 +596,6 @@ function TCListPageContent() {
       if (!groupMap[parent]) { const g = { module: parent, entries: [] }; groupMap[parent] = g; groups.push(g) }
       groupMap[parent].entries.push({ item, flatIdx })
     })
-    const allIds       = cycleItems.map(i => i.id)
-    const allSelAll    = allIds.length > 0 && allIds.every(id => selCycleIds.has(id))
-    const someSel      = allIds.some(id => selCycleIds.has(id))
     const passN = cycleItems.filter(i => i.cycle_status === 'pass').length
     const failN = cycleItems.filter(i => i.cycle_status === 'fail').length
     const naN   = cycleItems.filter(i => i.cycle_status === 'na').length
@@ -649,7 +606,7 @@ function TCListPageContent() {
       <>
         {/* Breadcrumb */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '12px', fontSize: '13px', flexWrap: 'wrap' }}>
-          <button onClick={() => { setActiveCycle(null); setCycleItems([]); setSelCycleIds(new Set()) }}
+          <button onClick={() => { setActiveCycle(null); setCycleItems([]) }}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', fontWeight: 600, padding: 0 }}>← TC 라이브러리</button>
           {planName && <><span style={{ color: '#CBD5E1' }}>›</span><span style={{ color: '#64748B', fontSize: '12px' }}>📐 {planName}</span></>}
           <span style={{ color: '#CBD5E1' }}>›</span>
@@ -688,23 +645,6 @@ function TCListPageContent() {
           </div>
         )}
 
-        {/* Bulk action bar */}
-        {selCycleIds.size > 0 && (
-          <div style={{ position: 'sticky', top: '8px', zIndex: 10, background: '#1E293B', color: 'white', borderRadius: '10px', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', boxShadow: '0 4px 24px rgba(0,0,0,.28)' }}>
-            <span style={{ flex: 1, fontSize: '12px', fontWeight: 600 }}>✓ {selCycleIds.size}개 선택됨</span>
-            {([{ val: 'pass' as StepStatus, icon: '✓', label: 'Pass', color: '#16A34A', bg: '#DCFCE7' }, { val: 'fail' as StepStatus, icon: '✗', label: 'Fail', color: '#DC2626', bg: '#FEE2E2' }, { val: 'na' as StepStatus, icon: '—', label: 'N/A', color: '#64748B', bg: '#F1F5F9' }]).map(btn => (
-              <button key={btn.val} onClick={() => bulkUpdateStatus(btn.val)} disabled={bulkActing}
-                style={{ fontSize: '12px', fontWeight: 700, padding: '5px 12px', borderRadius: '6px', border: 'none', background: btn.bg, color: btn.color, cursor: 'pointer', opacity: bulkActing ? 0.7 : 1 }}>
-                {btn.icon} {btn.label}
-              </button>
-            ))}
-            <button onClick={() => setSelCycleIds(new Set())}
-              style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '6px', border: '1px solid rgba(255,255,255,.25)', background: 'transparent', color: 'rgba(255,255,255,.7)', cursor: 'pointer' }}>
-              해제
-            </button>
-          </div>
-        )}
-
         {cycleLoading ? (
           <div style={{ textAlign: 'center', padding: '30px', color: '#94A3B8', fontSize: '13px' }}>불러오는 중...</div>
         ) : cycleItems.length === 0 ? (
@@ -713,18 +653,8 @@ function TCListPageContent() {
           </div>
         ) : (
           <div style={{ border: '1px solid #E2E8F0', borderRadius: '10px', overflow: 'hidden' }}>
-            {/* 전체 선택 헤더 */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 14px', background: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
-              <ICheckbox checked={allSelAll} indeterminate={someSel && !allSelAll} onChange={() => toggleModuleGroup(allIds, allSelAll)} />
-              <span style={{ flex: 1, fontSize: '11px', fontWeight: 700, color: '#64748B' }}>전체 선택 ({cycleItems.length}개)</span>
-              <span style={{ fontSize: '10px', color: '#94A3B8' }}>Shift+클릭으로 범위 선택</span>
-            </div>
-
             {/* 모듈 그룹 */}
             {groups.map(({ module, entries }) => {
-              const groupIds     = entries.map(e => e.item.id)
-              const allGroupSel  = groupIds.every(id => selCycleIds.has(id))
-              const someGroupSel = groupIds.some(id => selCycleIds.has(id))
               const gPassN = entries.filter(e => e.item.cycle_status === 'pass').length
               const gFailN = entries.filter(e => e.item.cycle_status === 'fail').length
 
@@ -732,8 +662,7 @@ function TCListPageContent() {
                 <div key={module}>
                   {/* 그룹 헤더 */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 14px', background: '#F1F5F9', borderBottom: '1px solid #E2E8F0', borderTop: '1px solid #E2E8F0' }}>
-                    <ICheckbox checked={allGroupSel} indeterminate={someGroupSel && !allGroupSel} onChange={() => toggleModuleGroup(groupIds, allGroupSel)} />
-                    <span style={{ flex: 1, fontSize: '12px', fontWeight: 700, color: '#374151' }}>📁 {module} 전체 ({entries.length}개)</span>
+                    <span style={{ flex: 1, fontSize: '12px', fontWeight: 700, color: '#374151' }}>📁 {module} ({entries.length}개)</span>
                     {(gPassN > 0 || gFailN > 0) && (
                       <span style={{ fontSize: '10px', color: '#94A3B8' }}>
                         {gPassN > 0 && <span style={{ color: '#059669', fontWeight: 700 }}>Pass {gPassN} </span>}
@@ -743,23 +672,17 @@ function TCListPageContent() {
                   </div>
 
                   {/* TC 행 */}
-                  {entries.map(({ item, flatIdx }, idx) => {
-                    const tm      = TYPE_META[item.type]         ?? TYPE_META.manual
-                    const pm      = PRIORITY_META[item.priority] ?? PRIORITY_META.medium
-                    const ccm     = CYCLE_CASE_META[item.cycle_status] ?? CYCLE_CASE_META.pending
-                    const isSel   = selCycleIds.has(item.id)
-                    const isLast  = idx === entries.length - 1
+                  {entries.map(({ item }, idx) => {
+                    const tm     = TYPE_META[item.type]         ?? TYPE_META.manual
+                    const pm     = PRIORITY_META[item.priority] ?? PRIORITY_META.medium
+                    const ccm    = CYCLE_CASE_META[item.cycle_status] ?? CYCLE_CASE_META.pending
+                    const isLast = idx === entries.length - 1
                     return (
                       <div key={item.id}
-                        onClick={e => handleCycleCaseClick(item.id, flatIdx, e.shiftKey)}
-                        style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', background: isSel ? '#EFF6FF' : 'white', borderBottom: isLast ? 'none' : '1px solid #F1F5F9', cursor: 'pointer', userSelect: 'none', transition: 'background .1s' }}
-                        onMouseEnter={e => { if (!isSel) (e.currentTarget as HTMLElement).style.background = '#F8FAFC' }}
-                        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = isSel ? '#EFF6FF' : 'white' }}>
-                        {/* 체크박스 (시각적) */}
-                        <div onClick={e => { e.stopPropagation(); handleCycleCaseClick(item.id, flatIdx, e.shiftKey) }}
-                          style={{ width: '16px', height: '16px', borderRadius: '4px', border: `2px solid ${isSel ? '#3B82F6' : '#D1D5DB'}`, background: isSel ? '#3B82F6' : 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                          {isSel && <span style={{ color: 'white', fontSize: '10px', fontWeight: 700 }}>✓</span>}
-                        </div>
+                        onClick={() => setCycleTC(item)}
+                        style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', background: 'white', borderBottom: isLast ? 'none' : '1px solid #F1F5F9', cursor: 'pointer', userSelect: 'none', transition: 'background .1s' }}
+                        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = '#F0F7FF' }}
+                        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'white' }}>
                         {/* 상태 아이콘 */}
                         <div style={{ width: '24px', height: '24px', borderRadius: '6px', background: ccm.bg, color: ccm.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700, flexShrink: 0 }}>{ccm.icon}</div>
                         <div style={{ flex: 1, minWidth: 0 }}>
@@ -769,12 +692,7 @@ function TCListPageContent() {
                         <span style={{ fontSize: '11px', fontWeight: 600, padding: '2px 7px', borderRadius: '8px', background: tm.bg, color: tm.color, border: `1px solid ${tm.border}`, flexShrink: 0 }}>{tm.icon}</span>
                         <span style={{ fontSize: '10px', fontWeight: 700, color: pm.color, flexShrink: 0 }}>{pm.dot}</span>
                         <span style={{ fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '8px', background: ccm.bg, color: ccm.color, flexShrink: 0, whiteSpace: 'nowrap' }}>{ccm.label}</span>
-                        <button onClick={e => { e.stopPropagation(); setCycleTC(item) }}
-                          style={{ fontSize: '12px', fontWeight: 700, padding: '5px 12px', borderRadius: '7px', border: 'none', background: 'linear-gradient(135deg,#60A5FA,#3B82F6)', cursor: 'pointer', color: 'white', flexShrink: 0, whiteSpace: 'nowrap', boxShadow: '0 2px 8px rgba(59,130,246,.35)' }}
-                          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.transform = 'translateY(-1px)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 4px 14px rgba(59,130,246,.5)' }}
-                          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.transform = 'none'; (e.currentTarget as HTMLElement).style.boxShadow = '0 2px 8px rgba(59,130,246,.35)' }}>
-                          ▶ 단계 실행
-                        </button>
+                        <span style={{ fontSize: '10px', color: '#CBD5E1', flexShrink: 0 }}>›</span>
                       </div>
                     )
                   })}
