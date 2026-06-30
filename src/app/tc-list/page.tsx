@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, type ReactNode, Suspense } from 'react'
+import { useState, useEffect, useRef, type ReactNode, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -15,14 +15,11 @@ interface TestCase {
   steps: string[] | string | null
   expected: string[] | string | null
 }
-
 interface TestCycle {
   id: number; plan_id: number; name: string; status: CycleStatus
   tcCount: number; passCount: number; failCount: number
 }
-
 interface TestPlan { id: number; name: string; cycles: TestCycle[] }
-
 interface CycleCase {
   id: number; test_case_id: number; cycle_status: StepStatus
   title: string; module: string
@@ -31,66 +28,54 @@ interface CycleCase {
   expected: string[] | string | null
 }
 
-// ── Constants ───────────────────────────────────────────────────────────
+// ── Constants ──────────────────────────────────────────────────────────
 const TYPE_META: Record<TCType, { label: string; icon: string; color: string; bg: string; border: string }> = {
   auto:   { label: '자동', icon: '🤖', color: '#4F46E5', bg: '#EEF2FF', border: '#C7D2FE' },
   manual: { label: '수동', icon: '👤', color: '#0891B2', bg: '#E0F2FE', border: '#BAE6FD' },
   mixed:  { label: '혼합', icon: '🔀', color: '#7C3AED', bg: '#F5F3FF', border: '#DDD6FE' },
 }
-
 const PRIORITY_META: Record<TCPriority, { label: string; color: string; bg: string; dot: string }> = {
   critical: { label: 'Critical', color: '#EF4444', bg: '#FEF2F2', dot: '🔴' },
   high:     { label: 'High',     color: '#F97316', bg: '#FFF7ED', dot: '🟠' },
   medium:   { label: 'Medium',   color: '#F59E0B', bg: '#FFFBEB', dot: '🟡' },
   low:      { label: 'Low',      color: '#6B7280', bg: '#F9FAFB', dot: '⚪' },
 }
-
 const CYCLE_STATUS_META: Record<CycleStatus, { label: string; color: string; bg: string; border: string }> = {
   not_started: { label: '미시작', color: '#6B7280', bg: '#F3F4F6', border: '#D1D5DB' },
   in_progress: { label: '진행중', color: '#2563EB', bg: '#EFF6FF', border: '#BFDBFE' },
   done:        { label: '완료',   color: '#059669', bg: '#D1FAE5', border: '#6EE7B7' },
 }
-
 const CYCLE_CASE_META: Record<StepStatus, { label: string; color: string; bg: string; icon: string }> = {
   pending: { label: '미수행', color: '#6B7280', bg: '#F3F4F6', icon: '○' },
   pass:    { label: 'Pass',   color: '#059669', bg: '#D1FAE5', icon: '✓' },
   fail:    { label: 'Fail',   color: '#DC2626', bg: '#FEE2E2', icon: '✗' },
   na:      { label: 'N/A',    color: '#94A3B8', bg: '#F1F5F9', icon: '—' },
 }
-
 const STEP_STYLE: Record<StepStatus, { bg: string; border: string; leftBorder: string; numBg: string }> = {
   pending: { bg: 'white',   border: '#E2E8F0', leftBorder: '#94A3B8', numBg: '#94A3B8' },
   pass:    { bg: '#F0FDF4', border: '#86EFAC', leftBorder: '#16A34A', numBg: '#16A34A' },
   fail:    { bg: '#FFF1F2', border: '#FCA5A5', leftBorder: '#DC2626', numBg: '#DC2626' },
   na:      { bg: '#F8FAFC', border: '#CBD5E1', leftBorder: '#94A3B8', numBg: '#CBD5E1' },
 }
-
 const STEP_BTNS = [
   { val: 'pass' as StepStatus, icon: '✓', label: 'Pass', color: '#16A34A', bg: '#DCFCE7' },
   { val: 'fail' as StepStatus, icon: '✗', label: 'Fail', color: '#DC2626', bg: '#FEE2E2' },
   { val: 'na'   as StepStatus, icon: '—', label: 'N/A',  color: '#64748B', bg: '#F1F5F9' },
 ]
 
-// ── Helpers ─────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────
 function parseSteps(raw: string[] | string | null): string[] {
   if (!raw) return []
   if (Array.isArray(raw)) return raw
   try { return JSON.parse(raw) } catch { return [String(raw)] }
 }
-
 function parseExpected(raw: string[] | string | null, stepCount: number): string[] {
   let arr: string[] = []
   if (!raw) arr = []
   else if (Array.isArray(raw)) arr = raw
-  else {
-    try {
-      const parsed = JSON.parse(raw)
-      arr = Array.isArray(parsed) ? parsed : [String(parsed)]
-    } catch { arr = [String(raw)] }
-  }
+  else { try { const p = JSON.parse(raw); arr = Array.isArray(p) ? p : [String(p)] } catch { arr = [String(raw)] } }
   return Array.from({ length: stepCount }, (_, i) => arr[i] ?? '')
 }
-
 function splitModule(module: string): { parent: string; sub: string } {
   for (const sep of [' - ', ' – ', ' — ']) {
     const idx = module.indexOf(sep)
@@ -98,21 +83,30 @@ function splitModule(module: string): { parent: string; sub: string } {
   }
   return { parent: module, sub: '' }
 }
-
-/** AI가 기대결과를 비워둔 스텝이 하나라도 있으면 true */
 function tcNeedsReview(tc: TestCase): boolean {
   const steps = parseSteps(tc.steps)
   if (steps.length === 0) return false
-  const expected = parseExpected(tc.expected, steps.length)
-  return expected.some(e => !e.trim())
+  return parseExpected(tc.expected, steps.length).some(e => !e.trim())
 }
 
-// ── Main Page ────────────────────────────────────────────────────────────
+// ── IndeterminateCheckbox ──────────────────────────────────────────────
+function ICheckbox({ checked, indeterminate, onChange }: {
+  checked: boolean; indeterminate: boolean; onChange: () => void
+}) {
+  const ref = useRef<HTMLInputElement>(null)
+  useEffect(() => { if (ref.current) ref.current.indeterminate = indeterminate }, [indeterminate])
+  return (
+    <input ref={ref} type="checkbox" checked={checked} onChange={onChange}
+      style={{ cursor: 'pointer', width: '15px', height: '15px', accentColor: '#3B82F6', flexShrink: 0 }} />
+  )
+}
+
+// ── Main page ──────────────────────────────────────────────────────────
 function TCListPageContent() {
   const router       = useRouter()
   const searchParams = useSearchParams()
 
-  // Base data
+  // Base
   const [projectId, setProjectId]   = useState<number | null>(null)
   const [tcs, setTcs]               = useState<TestCase[]>([])
   const [loading, setLoading]       = useState(true)
@@ -124,19 +118,17 @@ function TCListPageContent() {
   const [selectedSub, setSelectedSub]       = useState<string | null>(null)
   const [selectedTC, setSelectedTC]         = useState<TestCase | null>(null)
 
-  // TC multi-select
+  // Library multi-select (for adding to cycle)
   const [selectedTCIds, setSelectedTCIds]     = useState<Set<number>>(new Set())
   const [showAddDropdown, setShowAddDropdown] = useState(false)
   const [addingToCycle, setAddingToCycle]     = useState(false)
+  const [showCreateCycle, setShowCreateCycle]     = useState(false)
+  const [createCycleName, setCreateCycleName]     = useState('')
+  const [createCyclePlanId, setCreateCyclePlanId] = useState<number | 'new' | null>(null)
+  const [createNewPlanName, setCreateNewPlanName] = useState('')
+  const [creatingCycle, setCreatingCycle]         = useState(false)
 
-  // "새 사이클 만들기" panel
-  const [showCreateCycle, setShowCreateCycle]       = useState(false)
-  const [createCycleName, setCreateCycleName]       = useState('')
-  const [createCyclePlanId, setCreateCyclePlanId]   = useState<number | 'new' | null>(null)
-  const [createNewPlanName, setCreateNewPlanName]   = useState('')
-  const [creatingCycle, setCreatingCycle]           = useState(false)
-
-  // Test plans & cycles
+  // Plans & cycles
   const [testPlans, setTestPlans]             = useState<TestPlan[]>([])
   const [expandedPlanIds, setExpandedPlanIds] = useState<Set<number>>(new Set())
   const [showNewPlan, setShowNewPlan]         = useState(false)
@@ -145,11 +137,16 @@ function TCListPageContent() {
   const [newCycleName, setNewCycleName]       = useState('')
   const [planSaving, setPlanSaving]           = useState(false)
 
-  // Cycle execution view
-  const [activeCycle, setActiveCycle]     = useState<TestCycle | null>(null)
-  const [cycleItems, setCycleItems]       = useState<CycleCase[]>([])
-  const [cycleLoading, setCycleLoading]   = useState(false)
-  const [cycleTC, setCycleTC]             = useState<CycleCase | null>(null)
+  // Cycle execution
+  const [activeCycle, setActiveCycle]   = useState<TestCycle | null>(null)
+  const [cycleItems, setCycleItems]     = useState<CycleCase[]>([])
+  const [cycleLoading, setCycleLoading] = useState(false)
+  const [cycleTC, setCycleTC]           = useState<CycleCase | null>(null)
+
+  // Cycle bulk-select
+  const [selCycleIds, setSelCycleIds]           = useState<Set<number>>(new Set())
+  const [lastClickedCycleIdx, setLastCycleIdx]  = useState<number | null>(null)
+  const [bulkActing, setBulkActing]             = useState(false)
 
   // Add TC to cycle panel
   const [addTCToCycle, setAddTCToCycle]         = useState<TestCycle | null>(null)
@@ -169,28 +166,17 @@ function TCListPageContent() {
         : null
     setProjectId(pid)
     if (!pid) { setLoading(false); return }
-    fetchTCs(pid)
-    fetchPlans(pid)
+    fetchTCs(pid); fetchPlans(pid)
   }, [])
 
   async function fetchTCs(pid: number) {
     setLoading(true)
-    try {
-      const res  = await fetch(`/api/projects/${pid}/test-cases`)
-      const data = await res.json()
-      setTcs(data.testCases ?? [])
-    } catch { setError('TC 불러오기 실패') }
-    finally { setLoading(false) }
+    try { const d = await (await fetch(`/api/projects/${pid}/test-cases`)).json(); setTcs(d.testCases ?? []) }
+    catch { setError('TC 불러오기 실패') } finally { setLoading(false) }
   }
-
   async function fetchPlans(pid: number) {
-    try {
-      const res  = await fetch(`/api/projects/${pid}/test-plans`)
-      const data = await res.json()
-      setTestPlans(data.plans ?? [])
-    } catch {}
+    try { const d = await (await fetch(`/api/projects/${pid}/test-plans`)).json(); setTestPlans(d.plans ?? []) } catch {}
   }
-
   async function generateTCs() {
     if (!projectId) return
     setGenerating(true); setError('')
@@ -198,41 +184,33 @@ function TCListPageContent() {
       const res = await fetch(`/api/projects/${projectId}/generate-tc`, { method: 'POST' })
       if (!res.ok) throw new Error((await res.json()).error ?? 'TC 생성 실패')
       await fetchTCs(projectId)
-    } catch (e) { setError(String(e)) }
-    finally { setGenerating(false) }
+    } catch (e) { setError(String(e)) } finally { setGenerating(false) }
   }
-
   async function createPlan() {
     if (!projectId || !newPlanName.trim()) return
     setPlanSaving(true)
     try {
-      const res  = await fetch(`/api/projects/${projectId}/test-plans`, {
+      const d = await (await fetch(`/api/projects/${projectId}/test-plans`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: newPlanName.trim() }),
-      })
-      const data = await res.json()
-      setTestPlans(prev => [...prev, data.plan])
-      setExpandedPlanIds(prev => new Set(Array.from(prev).concat(data.plan.id)))
+      })).json()
+      setTestPlans(prev => [...prev, d.plan])
+      setExpandedPlanIds(prev => new Set(Array.from(prev).concat(d.plan.id)))
       setNewPlanName(''); setShowNewPlan(false)
     } finally { setPlanSaving(false) }
   }
-
-  async function createCyclePlan(planId: number) {
+  async function createCycleUnderPlan(planId: number) {
     if (!projectId || !newCycleName.trim()) return
     setPlanSaving(true)
     try {
-      const res  = await fetch(`/api/test-plans/${planId}/cycles`, {
+      const d = await (await fetch(`/api/test-plans/${planId}/cycles`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: newCycleName.trim(), projectId }),
-      })
-      const data = await res.json()
-      setTestPlans(prev => prev.map(p =>
-        p.id === planId ? { ...p, cycles: [...p.cycles, data.cycle] } : p
-      ))
+      })).json()
+      setTestPlans(prev => prev.map(p => p.id === planId ? { ...p, cycles: [...p.cycles, d.cycle] } : p))
       setNewCycleName(''); setShowNewCycleFor(null)
     } finally { setPlanSaving(false) }
   }
-
   async function addToCycle(cycleId: number) {
     if (!selectedTCIds.size) return
     setAddingToCycle(true)
@@ -241,82 +219,51 @@ function TCListPageContent() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tcIds: Array.from(selectedTCIds as Set<number>) }),
       })
-      setSelectedTCIds(new Set())
-      setShowAddDropdown(false)
+      setSelectedTCIds(new Set()); setShowAddDropdown(false)
       if (projectId) await fetchPlans(projectId)
     } finally { setAddingToCycle(false) }
   }
-
-  /** TC 선택 → 새 사이클 만들기 (플랜 신규/기존 선택) */
   async function handleCreateCycleWithTCs() {
     if (!projectId || !createCycleName.trim()) return
     setCreatingCycle(true)
     try {
       let planId: number
-
       if (createCyclePlanId === 'new') {
         if (!createNewPlanName.trim()) return
-        const pr  = await fetch(`/api/projects/${projectId}/test-plans`, {
+        const pd = await (await fetch(`/api/projects/${projectId}/test-plans`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: createNewPlanName.trim() }),
-        })
-        const pd  = await pr.json()
-        planId    = pd.plan.id
+        })).json()
+        planId = pd.plan.id
         setTestPlans(prev => [...prev, pd.plan])
-      } else if (typeof createCyclePlanId === 'number') {
-        planId = createCyclePlanId
-      } else {
-        return
-      }
-
-      const cr  = await fetch(`/api/test-plans/${planId}/cycles`, {
+      } else if (typeof createCyclePlanId === 'number') { planId = createCyclePlanId }
+      else return
+      const cd = await (await fetch(`/api/test-plans/${planId}/cycles`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: createCycleName.trim(), projectId }),
-      })
-      const cd  = await cr.json()
-      const newCycle: TestCycle = cd.cycle
-
-      await fetch(`/api/test-cycles/${newCycle.id}/cases`, {
+      })).json()
+      await fetch(`/api/test-cycles/${cd.cycle.id}/cases`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tcIds: Array.from(selectedTCIds as Set<number>) }),
       })
-
-      // refresh plans & open cycle immediately
       await fetchPlans(projectId)
-      await openCycleRun({ ...newCycle, tcCount: selectedTCIds.size, passCount: 0, failCount: 0 })
-
-      setSelectedTCIds(new Set())
-      setShowCreateCycle(false)
-      setCreateCycleName('')
-      setCreateCyclePlanId(null)
-      setCreateNewPlanName('')
+      await openCycleRun({ ...cd.cycle, tcCount: selectedTCIds.size, passCount: 0, failCount: 0 })
+      setSelectedTCIds(new Set()); setShowCreateCycle(false); setCreateCycleName(''); setCreateCyclePlanId(null); setCreateNewPlanName('')
     } finally { setCreatingCycle(false) }
   }
-
   async function openCycleRun(cycle: TestCycle) {
-    setActiveCycle(cycle)
-    setCycleLoading(true)
-    try {
-      const res  = await fetch(`/api/test-cycles/${cycle.id}/cases`)
-      const data = await res.json()
-      setCycleItems(data.cases ?? [])
-    } finally { setCycleLoading(false) }
+    setActiveCycle(cycle); setCycleLoading(true); setSelCycleIds(new Set()); setLastCycleIdx(null)
+    try { const d = await (await fetch(`/api/test-cycles/${cycle.id}/cases`)).json(); setCycleItems(d.cases ?? []) }
+    finally { setCycleLoading(false) }
   }
-
   async function openAddTCPanel(cycle: TestCycle, fromRun = false) {
     try {
-      const res  = await fetch(`/api/test-cycles/${cycle.id}/cases`)
-      const data = await res.json()
-      const existing = new Set<number>((data.cases ?? []).map((c: CycleCase) => c.test_case_id as number))
-      setExistingCycleIds(existing)
+      const d = await (await fetch(`/api/test-cycles/${cycle.id}/cases`)).json()
+      setExistingCycleIds(new Set<number>((d.cases ?? []).map((c: CycleCase) => c.test_case_id as number)))
     } catch { setExistingCycleIds(new Set()) }
-    setAddTCToCycle(cycle)
-    setAddFromRun(fromRun)
-    setAddSelectIds(new Set())
-    setAddBrowseParent(null)
-    setAddBrowseSub(null)
+    setAddTCToCycle(cycle); setAddFromRun(fromRun)
+    setAddSelectIds(new Set()); setAddBrowseParent(null); setAddBrowseSub(null)
   }
-
   async function addSelectedToCycle() {
     if (!addTCToCycle || !addSelectIds.size) return
     setAddingCycleTCs(true)
@@ -328,32 +275,57 @@ function TCListPageContent() {
       setExistingCycleIds(prev => new Set(Array.from(prev).concat(Array.from(addSelectIds as Set<number>))))
       setAddSelectIds(new Set())
       if (activeCycle?.id === addTCToCycle.id) {
-        const res  = await fetch(`/api/test-cycles/${addTCToCycle.id}/cases`)
-        const data = await res.json()
-        setCycleItems(data.cases ?? [])
+        const d = await (await fetch(`/api/test-cycles/${addTCToCycle.id}/cases`)).json()
+        setCycleItems(d.cases ?? [])
       }
       if (projectId) await fetchPlans(projectId)
     } finally { setAddingCycleTCs(false) }
   }
 
+  // ── Cycle bulk select helpers ──────────────────────────────────────
+  function handleCycleCaseClick(itemId: number, flatIdx: number, shiftKey: boolean) {
+    if (shiftKey && lastClickedCycleIdx !== null) {
+      const lo = Math.min(lastClickedCycleIdx, flatIdx)
+      const hi = Math.max(lastClickedCycleIdx, flatIdx)
+      const rangeIds = cycleItems.slice(lo, hi + 1).map(i => i.id)
+      setSelCycleIds(prev => new Set(Array.from(prev).concat(rangeIds)))
+    } else {
+      setSelCycleIds(prev => { const n = new Set(prev); n.has(itemId) ? n.delete(itemId) : n.add(itemId); return n })
+      setLastCycleIdx(flatIdx)
+    }
+  }
+  function toggleModuleGroup(ids: number[], allSelected: boolean) {
+    setSelCycleIds(prev => {
+      const n = new Set(prev)
+      if (allSelected) ids.forEach(id => n.delete(id)); else ids.forEach(id => n.add(id))
+      return n
+    })
+  }
+  async function bulkUpdateStatus(status: StepStatus) {
+    if (!selCycleIds.size) return
+    setBulkActing(true)
+    try {
+      await Promise.all(Array.from(selCycleIds as Set<number>).map(id =>
+        fetch(`/api/test-cycle-cases/${id}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status }),
+        })
+      ))
+      setCycleItems(prev => prev.map(i => (selCycleIds as Set<number>).has(i.id) ? { ...i, cycle_status: status } : i))
+      setSelCycleIds(new Set())
+      if (projectId) await fetchPlans(projectId)
+    } finally { setBulkActing(false) }
+  }
+
   function toggleAddTC(tcId: number) {
     if (existingCycleIds.has(tcId)) return
-    setAddSelectIds(prev => {
-      const next = new Set(prev)
-      if (next.has(tcId)) next.delete(tcId); else next.add(tcId)
-      return next
-    })
+    setAddSelectIds(prev => { const n = new Set(prev); n.has(tcId) ? n.delete(tcId) : n.add(tcId); return n })
   }
-
   function toggleTC(tcId: number) {
-    setSelectedTCIds(prev => {
-      const next = new Set(prev)
-      if (next.has(tcId)) next.delete(tcId); else next.add(tcId)
-      return next
-    })
+    setSelectedTCIds(prev => { const n = new Set(prev); n.has(tcId) ? n.delete(tcId) : n.add(tcId); return n })
   }
 
-  // Derived data
+  // Derived
   const parentMap: Record<string, Record<string, TestCase[]>> = {}
   for (const tc of tcs) {
     const { parent, sub } = splitModule(tc.module || '기타')
@@ -362,60 +334,19 @@ function TCListPageContent() {
     if (!parentMap[parent][subKey]) parentMap[parent][subKey] = []
     parentMap[parent][subKey].push(tc)
   }
-  const parentList = Object.keys(parentMap)
-  const allCycles  = testPlans.flatMap(p => p.cycles.map(c => ({ ...c, planName: p.name })))
+  const parentList  = Object.keys(parentMap)
+  const allCycles   = testPlans.flatMap(p => p.cycles.map(c => ({ ...c, planName: p.name })))
   const reviewCount = tcs.filter(tcNeedsReview).length
 
-  // ── Library Breadcrumb ─────────────────────────────────────────────
-  const LibBreadcrumb = () => (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '16px', fontSize: '13px', flexWrap: 'wrap' }}>
-      <button onClick={() => { setSelectedParent(null); setSelectedSub(null); setSelectedTC(null) }}
-        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', fontWeight: 600, padding: 0 }}>
-        🧪 TC 목록
-      </button>
-      {selectedParent && (
-        <><span style={{ color: '#CBD5E1' }}>›</span>
-          <button onClick={() => { setSelectedSub(null); setSelectedTC(null) }}
-            style={{ background: 'none', border: 'none', padding: 0, cursor: selectedSub ? 'pointer' : 'default', color: selectedSub ? 'var(--primary)' : '#1E293B', fontWeight: 600 }}>
-            📁 {selectedParent}
-          </button>
-        </>
-      )}
-      {selectedSub && (
-        <><span style={{ color: '#CBD5E1' }}>›</span>
-          <button onClick={() => setSelectedTC(null)}
-            style={{ background: 'none', border: 'none', padding: 0, cursor: selectedTC ? 'pointer' : 'default', color: selectedTC ? 'var(--primary)' : '#1E293B', fontWeight: 600 }}>
-            📋 {selectedSub}
-          </button>
-        </>
-      )}
-      {selectedTC && (
-        <><span style={{ color: '#CBD5E1' }}>›</span>
-          <span style={{ color: '#1E293B', fontWeight: 600 }}>📄 {selectedTC.title}</span>
-        </>
-      )}
-    </div>
-  )
-
-  // ── TC selection bar + create cycle panel ──────────────────────────
+  // ── SelectionBar (library → cycle) ────────────────────────────────
   const SelectionBar = () => selectedTCIds.size === 0 ? null : (
     <div style={{ marginBottom: '12px' }}>
-      {/* Bar */}
-      <div style={{
-        position: 'sticky', top: '8px', zIndex: 10,
-        background: '#1E293B', color: 'white', borderRadius: showCreateCycle ? '10px 10px 0 0' : '10px',
-        padding: '10px 16px', display: 'flex', alignItems: 'center', gap: '10px',
-        boxShadow: '0 4px 24px rgba(0,0,0,.28)',
-      }}>
+      <div style={{ position: 'sticky', top: '8px', zIndex: 10, background: '#1E293B', color: 'white', borderRadius: showCreateCycle ? '10px 10px 0 0' : '10px', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: '10px', boxShadow: '0 4px 24px rgba(0,0,0,.28)' }}>
         <span style={{ flex: 1, fontSize: '13px', fontWeight: 600 }}>✓ {selectedTCIds.size}개 선택됨</span>
-
-        {/* 새 사이클 만들기 */}
         <button onClick={() => { setShowCreateCycle(v => !v); setShowAddDropdown(false) }}
           style={{ fontSize: '12px', fontWeight: 700, padding: '6px 14px', borderRadius: '7px', border: 'none', background: '#3B82F6', color: 'white', cursor: 'pointer', whiteSpace: 'nowrap' }}>
           + 새 사이클 만들기
         </button>
-
-        {/* 기존 사이클에 추가 */}
         <div style={{ position: 'relative' }}>
           <button onClick={() => { setShowAddDropdown(v => !v); setShowCreateCycle(false) }}
             style={{ fontSize: '12px', fontWeight: 600, padding: '6px 12px', borderRadius: '7px', border: '1px solid rgba(255,255,255,.3)', background: 'transparent', color: 'white', cursor: 'pointer', whiteSpace: 'nowrap' }}>
@@ -438,29 +369,22 @@ function TCListPageContent() {
             </div>
           )}
         </div>
-
         <button onClick={() => { setSelectedTCIds(new Set()); setShowAddDropdown(false); setShowCreateCycle(false) }}
           style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '6px', border: '1px solid rgba(255,255,255,.25)', background: 'transparent', color: 'rgba(255,255,255,.7)', cursor: 'pointer' }}>
           선택 해제
         </button>
       </div>
-
-      {/* 새 사이클 만들기 패널 */}
       {showCreateCycle && (
         <div style={{ background: '#F0F9FF', border: '1px solid #BFDBFE', borderTop: 'none', borderRadius: '0 0 10px 10px', padding: '16px 18px' }}>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: '#1D4ED8', marginBottom: '14px' }}>새 테스트 사이클 만들기</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {/* Cycle name */}
+          <div style={{ fontSize: '12px', fontWeight: 700, color: '#1D4ED8', marginBottom: '12px' }}>새 테스트 사이클 만들기</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             <div>
-              <label style={{ fontSize: '11px', fontWeight: 600, color: '#374151', display: 'block', marginBottom: '5px' }}>사이클 이름</label>
-              <input autoFocus placeholder="예: 스모크 테스트 사이클" value={createCycleName}
-                onChange={e => setCreateCycleName(e.target.value)}
-                style={{ width: '100%', boxSizing: 'border-box', padding: '8px 12px', borderRadius: '7px', border: '1.5px solid #93C5FD', outline: 'none', fontSize: '13px' }}
-              />
+              <label style={{ fontSize: '11px', fontWeight: 600, color: '#374151', display: 'block', marginBottom: '4px' }}>사이클 이름</label>
+              <input autoFocus placeholder="예: 스모크 테스트 사이클" value={createCycleName} onChange={e => setCreateCycleName(e.target.value)}
+                style={{ width: '100%', boxSizing: 'border-box', padding: '8px 12px', borderRadius: '7px', border: '1.5px solid #93C5FD', outline: 'none', fontSize: '13px' }} />
             </div>
-            {/* Plan select */}
             <div>
-              <label style={{ fontSize: '11px', fontWeight: 600, color: '#374151', display: 'block', marginBottom: '5px' }}>테스트 플랜</label>
+              <label style={{ fontSize: '11px', fontWeight: 600, color: '#374151', display: 'block', marginBottom: '4px' }}>테스트 플랜</label>
               <select value={createCyclePlanId ?? ''} onChange={e => setCreateCyclePlanId(e.target.value === 'new' ? 'new' : Number(e.target.value))}
                 style={{ width: '100%', padding: '8px 12px', borderRadius: '7px', border: '1.5px solid #93C5FD', outline: 'none', fontSize: '13px', background: 'white', cursor: 'pointer' }}>
                 <option value=''>-- 플랜 선택 --</option>
@@ -468,29 +392,19 @@ function TCListPageContent() {
                 <option value='new'>+ 새 플랜 만들기</option>
               </select>
             </div>
-            {/* New plan name (if 'new' selected) */}
             {createCyclePlanId === 'new' && (
               <div>
-                <label style={{ fontSize: '11px', fontWeight: 600, color: '#374151', display: 'block', marginBottom: '5px' }}>새 플랜 이름</label>
-                <input placeholder="예: Sprint 1 테스트 플랜" value={createNewPlanName}
-                  onChange={e => setCreateNewPlanName(e.target.value)}
-                  style={{ width: '100%', boxSizing: 'border-box', padding: '8px 12px', borderRadius: '7px', border: '1.5px solid #93C5FD', outline: 'none', fontSize: '13px' }}
-                />
+                <label style={{ fontSize: '11px', fontWeight: 600, color: '#374151', display: 'block', marginBottom: '4px' }}>새 플랜 이름</label>
+                <input placeholder="예: Sprint 1 플랜" value={createNewPlanName} onChange={e => setCreateNewPlanName(e.target.value)}
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '8px 12px', borderRadius: '7px', border: '1.5px solid #93C5FD', outline: 'none', fontSize: '13px' }} />
               </div>
             )}
-            {/* Buttons */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '2px' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
               <button onClick={() => { setShowCreateCycle(false); setCreateCycleName(''); setCreateCyclePlanId(null); setCreateNewPlanName('') }} className="btn btn-secondary btn-sm">취소</button>
-              <button
-                onClick={handleCreateCycleWithTCs}
-                disabled={
-                  creatingCycle ||
-                  !createCycleName.trim() ||
-                  !createCyclePlanId ||
-                  (createCyclePlanId === 'new' && !createNewPlanName.trim())
-                }
+              <button onClick={handleCreateCycleWithTCs}
+                disabled={creatingCycle || !createCycleName.trim() || !createCyclePlanId || (createCyclePlanId === 'new' && !createNewPlanName.trim())}
                 style={{ padding: '7px 18px', borderRadius: '7px', border: 'none', fontWeight: 700, fontSize: '13px', cursor: 'pointer', background: '#3B82F6', color: 'white', opacity: creatingCycle ? 0.7 : 1 }}>
-                {creatingCycle ? '만드는 중...' : `사이클 만들기 (${selectedTCIds.size}개 TC) →`}
+                {creatingCycle ? '만드는 중...' : `사이클 만들기 (${selectedTCIds.size}개) →`}
               </button>
             </div>
           </div>
@@ -499,206 +413,87 @@ function TCListPageContent() {
     </div>
   )
 
-  // ── Test Plan Section ──────────────────────────────────────────────
-  const PlanSection = () => (
-    <div style={{ marginBottom: '18px', border: '1px solid #E2E8F0', borderRadius: '12px', overflow: 'hidden', background: 'white' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '11px 16px', background: '#F8FAFC', borderBottom: testPlans.length > 0 ? '1px solid #E2E8F0' : 'none' }}>
-        <div style={{ fontSize: '12px', fontWeight: 700, color: '#374151', letterSpacing: '.04em' }}>📐 테스트 플랜 & 사이클</div>
-        <button onClick={() => setShowNewPlan(v => !v)}
-          style={{ fontSize: '11px', fontWeight: 600, padding: '4px 10px', borderRadius: '6px', border: '1px solid #D1D5DB', background: 'white', cursor: 'pointer', color: '#374151' }}>
-          + 새 플랜
+  // ── Breadcrumb ─────────────────────────────────────────────────────
+  const LibBreadcrumb = () => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '14px', fontSize: '13px', flexWrap: 'wrap' }}>
+      <button onClick={() => { setSelectedParent(null); setSelectedSub(null); setSelectedTC(null) }}
+        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', fontWeight: 600, padding: 0 }}>🧪 TC 라이브러리</button>
+      {selectedParent && <>
+        <span style={{ color: '#CBD5E1' }}>›</span>
+        <button onClick={() => { setSelectedSub(null); setSelectedTC(null) }}
+          style={{ background: 'none', border: 'none', padding: 0, cursor: selectedSub ? 'pointer' : 'default', color: selectedSub ? 'var(--primary)' : '#1E293B', fontWeight: 600 }}>
+          📁 {selectedParent}
         </button>
-      </div>
-
-      {showNewPlan && (
-        <div style={{ padding: '10px 14px', borderBottom: '1px solid #E2E8F0', background: '#F0F9FF', display: 'flex', gap: '7px', alignItems: 'center' }}>
-          <input autoFocus placeholder="플랜 이름 입력..." value={newPlanName}
-            onChange={e => setNewPlanName(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') createPlan(); if (e.key === 'Escape') { setShowNewPlan(false); setNewPlanName('') } }}
-            style={{ flex: 1, padding: '6px 10px', borderRadius: '6px', border: '1.5px solid #93C5FD', outline: 'none', fontSize: '13px' }}
-          />
-          <button onClick={createPlan} disabled={planSaving || !newPlanName.trim()} className="btn btn-primary btn-sm">확인</button>
-          <button onClick={() => { setShowNewPlan(false); setNewPlanName('') }} className="btn btn-secondary btn-sm">취소</button>
-        </div>
-      )}
-
-      {testPlans.length === 0 && !showNewPlan && (
-        <div style={{ padding: '18px', textAlign: 'center', fontSize: '12px', color: '#9CA3AF' }}>
-          플랜을 추가하거나, TC를 선택해 <strong>새 사이클 만들기</strong>를 클릭하세요
-        </div>
-      )}
-
-      {testPlans.map((plan, pi) => {
-        const isExpanded = expandedPlanIds.has(plan.id)
-        const isLast = pi === testPlans.length - 1
-        return (
-          <div key={plan.id} style={{ borderBottom: isLast && !isExpanded ? 'none' : '1px solid #F1F5F9' }}>
-            <div onClick={() => setExpandedPlanIds(prev => { const n = new Set(prev); n.has(plan.id) ? n.delete(plan.id) : n.add(plan.id); return n })}
-              style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 16px', cursor: 'pointer', background: isExpanded ? '#F0F9FF' : 'white', transition: 'background .12s', userSelect: 'none' }}>
-              <span style={{ fontSize: '9px', color: '#94A3B8', display: 'inline-block', transition: 'transform .18s', transform: isExpanded ? 'rotate(90deg)' : 'rotate(0)' }}>▶</span>
-              <span style={{ flex: 1, fontSize: '13px', fontWeight: 600, color: '#1E293B' }}>{plan.name}</span>
-              <span style={{ fontSize: '11px', color: '#94A3B8' }}>{plan.cycles.length}개 사이클</span>
-              <button onClick={e => { e.stopPropagation(); setShowNewCycleFor(plan.id); setExpandedPlanIds(prev => new Set(Array.from(prev).concat(plan.id))) }}
-                style={{ fontSize: '10px', fontWeight: 600, padding: '3px 9px', borderRadius: '5px', border: '1px solid #D1D5DB', background: 'white', cursor: 'pointer', color: '#6B7280', flexShrink: 0 }}>
-                + 사이클
-              </button>
-            </div>
-
-            {isExpanded && (
-              <div style={{ background: '#FAFBFF', borderTop: '1px solid #EEF2FF' }}>
-                {plan.cycles.length === 0 && showNewCycleFor !== plan.id && (
-                  <div style={{ padding: '10px 20px', fontSize: '11px', color: '#9CA3AF' }}>사이클이 없습니다.</div>
-                )}
-                {plan.cycles.map((cycle, ci) => {
-                  const csm = CYCLE_STATUS_META[cycle.status] ?? CYCLE_STATUS_META.not_started
-                  const pct = cycle.tcCount > 0 ? Math.round((cycle.passCount + cycle.failCount) / cycle.tcCount * 100) : 0
-                  return (
-                    <div key={cycle.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 16px 9px 28px', borderBottom: ci < plan.cycles.length - 1 || showNewCycleFor === plan.id ? '1px solid #EEF2FF' : 'none' }}>
-                      <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: csm.color, flexShrink: 0 }} />
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: '12px', fontWeight: 600, color: '#1E293B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cycle.name}</div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '3px' }}>
-                          <span style={{ fontSize: '10px', color: '#94A3B8' }}>{cycle.tcCount} TC</span>
-                          {cycle.tcCount > 0 && (
-                            <div style={{ height: '4px', width: '48px', background: '#E2E8F0', borderRadius: '2px', overflow: 'hidden' }}>
-                              <div style={{ height: '100%', background: cycle.failCount > 0 ? '#DC2626' : '#16A34A', width: `${pct}%`, transition: 'width .3s' }} />
-                            </div>
-                          )}
-                          {cycle.tcCount > 0 && <span style={{ fontSize: '10px', color: '#94A3B8' }}>{pct}%</span>}
-                        </div>
-                      </div>
-                      <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '8px', background: csm.bg, color: csm.color, border: `1px solid ${csm.border}`, flexShrink: 0 }}>{csm.label}</span>
-                      <button onClick={() => openCycleRun(cycle)}
-                        style={{ fontSize: '11px', fontWeight: 600, padding: '4px 11px', borderRadius: '6px', border: '1px solid #3B82F6', background: '#EFF6FF', cursor: 'pointer', color: '#2563EB', flexShrink: 0, whiteSpace: 'nowrap' }}>
-                        실행 →
-                      </button>
-                      <button onClick={e => { e.stopPropagation(); openAddTCPanel(cycle, false) }}
-                        style={{ fontSize: '11px', fontWeight: 600, padding: '4px 11px', borderRadius: '6px', border: '1px solid #10B981', background: '#ECFDF5', cursor: 'pointer', color: '#059669', flexShrink: 0, whiteSpace: 'nowrap' }}>
-                        + TC
-                      </button>
-                    </div>
-                  )
-                })}
-                {showNewCycleFor === plan.id && (
-                  <div style={{ padding: '9px 16px 9px 28px', display: 'flex', gap: '7px', alignItems: 'center' }}>
-                    <input autoFocus placeholder="사이클 이름..." value={newCycleName}
-                      onChange={e => setNewCycleName(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter') createCyclePlan(plan.id); if (e.key === 'Escape') { setShowNewCycleFor(null); setNewCycleName('') } }}
-                      style={{ flex: 1, padding: '5px 9px', borderRadius: '6px', border: '1.5px solid #93C5FD', outline: 'none', fontSize: '12px' }}
-                    />
-                    <button onClick={() => createCyclePlan(plan.id)} disabled={planSaving || !newCycleName.trim()} className="btn btn-primary btn-sm">확인</button>
-                    <button onClick={() => { setShowNewCycleFor(null); setNewCycleName('') }} className="btn btn-secondary btn-sm">취소</button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )
-      })}
+      </>}
+      {selectedSub && <>
+        <span style={{ color: '#CBD5E1' }}>›</span>
+        <button onClick={() => setSelectedTC(null)}
+          style={{ background: 'none', border: 'none', padding: 0, cursor: selectedTC ? 'pointer' : 'default', color: selectedTC ? 'var(--primary)' : '#1E293B', fontWeight: 600 }}>
+          📋 {selectedSub}
+        </button>
+      </>}
+      {selectedTC && <><span style={{ color: '#CBD5E1' }}>›</span><span style={{ color: '#1E293B', fontWeight: 600 }}>📄 {selectedTC.title}</span></>}
     </div>
   )
 
-  // ═══════════════════════════════════════════════════════════════════
-  // RENDER DECISIONS
-  // ═══════════════════════════════════════════════════════════════════
+  // ── Determine right-panel content ──────────────────────────────────
+  let rightContent: ReactNode = null
 
-  // ① Cycle TC step detail (with P/F/NA)
+  // ① Cycle TC step detail
   if (cycleTC && activeCycle) {
     const { parent, sub } = splitModule(cycleTC.module || '기타')
-    return (
+    rightContent = (
       <TCStepDetail
         tc={cycleTC as unknown as TestCase}
         breadcrumb={
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '16px', fontSize: '13px', flexWrap: 'wrap' }}>
-            <button onClick={() => { setActiveCycle(null); setCycleItems([]); setCycleTC(null) }}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', fontWeight: 600, padding: 0 }}>
-              🧪 TC 목록
-            </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '14px', fontSize: '13px', flexWrap: 'wrap' }}>
+            <button onClick={() => setCycleTC(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', fontWeight: 600, padding: 0 }}>← {activeCycle.name}</button>
             <span style={{ color: '#CBD5E1' }}>›</span>
-            <button onClick={() => setCycleTC(null)}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', fontWeight: 600, padding: 0 }}>
-              📋 {activeCycle.name}
-            </button>
-            <span style={{ color: '#CBD5E1' }}>›</span>
-            <span style={{ color: '#1E293B', fontWeight: 600 }}>📄 {cycleTC.title}</span>
+            <span style={{ fontWeight: 600, color: '#1E293B' }}>📄 {cycleTC.title}</span>
           </div>
         }
         onBack={() => setCycleTC(null)}
-        onStatusChange={newStatus => {
-          setCycleItems(prev => prev.map(item =>
-            item.id === cycleTC.id ? { ...item, cycle_status: newStatus as StepStatus } : item
-          ))
-        }}
-        selectedParent={parent}
-        selectedSub={sub}
+        onStatusChange={newStatus => setCycleItems(prev => prev.map(i => i.id === cycleTC.id ? { ...i, cycle_status: newStatus as StepStatus } : i))}
+        onExpectedChange={() => {}}
+        selectedParent={parent} selectedSub={sub}
         cycleItemId={cycleTC.id}
       />
     )
   }
-
   // ② Add TC to cycle panel
-  if (addTCToCycle) {
-    const cycleName = addTCToCycle.name
-    const existingN = existingCycleIds.size
-    const newlyN    = addSelectIds.size
-
-    // Navigation inside the add panel
-    const addSubMap = addBrowseParent ? (parentMap[addBrowseParent] ?? {}) : {}
+  else if (addTCToCycle) {
+    const addSubMap  = addBrowseParent ? (parentMap[addBrowseParent] ?? {}) : {}
     const addSubList = Object.keys(addSubMap)
-
-    return (
+    rightContent = (
       <>
-        {/* Breadcrumb */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '16px', fontSize: '13px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '14px', fontSize: '13px', flexWrap: 'wrap' }}>
           <button onClick={() => { setAddTCToCycle(null); setAddBrowseParent(null); setAddBrowseSub(null) }}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', fontWeight: 600, padding: 0 }}>
-            🧪 TC 목록
+            {addFromRun && activeCycle ? `← ${activeCycle.name}` : '← TC 라이브러리'}
           </button>
-          {addFromRun && activeCycle && (
-            <><span style={{ color: '#CBD5E1' }}>›</span>
-              <button onClick={() => { setAddTCToCycle(null); setAddBrowseParent(null); setAddBrowseSub(null) }}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', fontWeight: 600, padding: 0 }}>
-                📋 {activeCycle.name}
-              </button>
-            </>
-          )}
           <span style={{ color: '#CBD5E1' }}>›</span>
           <span style={{ fontWeight: 600, color: '#059669' }}>+ TC 추가</span>
-          {addBrowseParent && (
-            <><span style={{ color: '#CBD5E1' }}>›</span>
-              <button onClick={() => setAddBrowseSub(null)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: addBrowseSub ? 'var(--primary)' : '#1E293B', fontWeight: 600, padding: 0 }}>
-                📁 {addBrowseParent}
-              </button>
-            </>
-          )}
-          {addBrowseSub && (
-            <><span style={{ color: '#CBD5E1' }}>›</span>
-              <span style={{ fontWeight: 600, color: '#1E293B' }}>📋 {addBrowseSub}</span>
-            </>
-          )}
+          {addBrowseParent && <><span style={{ color: '#CBD5E1' }}>›</span>
+            <button onClick={() => setAddBrowseSub(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: addBrowseSub ? 'var(--primary)' : '#1E293B', fontWeight: 600, padding: 0 }}>📁 {addBrowseParent}</button>
+          </>}
+          {addBrowseSub && <><span style={{ color: '#CBD5E1' }}>›</span><span style={{ fontWeight: 600, color: '#1E293B' }}>📋 {addBrowseSub}</span></>}
         </div>
-
-        {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', marginBottom: '14px', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: '14px', gap: '10px' }}>
           <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 700, fontSize: '16px', color: '#1E293B' }}>📋 {cycleName}에 TC 추가</div>
+            <div style={{ fontWeight: 700, fontSize: '16px', color: '#1E293B' }}>📋 {addTCToCycle.name}에 TC 추가</div>
             <div style={{ fontSize: '11px', color: '#94A3B8', marginTop: '3px' }}>
-              이미 추가됨 {existingN}개
-              {newlyN > 0 && <span style={{ color: '#059669', fontWeight: 700, marginLeft: '8px' }}>· 새로 선택 {newlyN}개</span>}
+              이미 추가됨 {existingCycleIds.size}개
+              {addSelectIds.size > 0 && <span style={{ color: '#059669', fontWeight: 700, marginLeft: '8px' }}>· 새로 선택 {addSelectIds.size}개</span>}
             </div>
           </div>
-          <button onClick={() => { setAddTCToCycle(null); setAddBrowseParent(null); setAddBrowseSub(null) }}
-            className="btn btn-secondary btn-sm">← 뒤로</button>
+          <button onClick={() => { setAddTCToCycle(null); setAddBrowseParent(null); setAddBrowseSub(null) }} className="btn btn-secondary btn-sm">← 뒤로</button>
         </div>
-
-        {/* Floating add bar */}
         {addSelectIds.size > 0 && (
           <div style={{ position: 'sticky', top: '8px', zIndex: 10, background: '#059669', color: 'white', borderRadius: '10px', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px', boxShadow: '0 4px 20px rgba(5,150,105,.35)' }}>
             <span style={{ flex: 1, fontSize: '13px', fontWeight: 600 }}>✓ {addSelectIds.size}개 선택됨</span>
             <button onClick={addSelectedToCycle} disabled={addingCycleTCs}
               style={{ fontSize: '13px', fontWeight: 700, padding: '7px 18px', borderRadius: '7px', border: 'none', background: 'white', color: '#059669', cursor: 'pointer', opacity: addingCycleTCs ? 0.7 : 1 }}>
-              {addingCycleTCs ? '추가 중...' : `사이클에 추가 →`}
+              {addingCycleTCs ? '추가 중...' : '사이클에 추가 →'}
             </button>
             <button onClick={() => setAddSelectIds(new Set())}
               style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '6px', border: '1px solid rgba(255,255,255,.4)', background: 'transparent', color: 'rgba(255,255,255,.8)', cursor: 'pointer' }}>
@@ -706,93 +501,404 @@ function TCListPageContent() {
             </button>
           </div>
         )}
-
-        {/* Level 3: TC list */}
+        {/* Level 3 */}
         {addBrowseParent && addBrowseSub ? (
-          <div style={{ border: '1px solid var(--gray-200)', borderRadius: '10px', overflow: 'hidden' }}>
+          <div style={{ border: '1px solid #E2E8F0', borderRadius: '10px', overflow: 'hidden' }}>
             {(addSubMap[addBrowseSub] ?? []).map((tc, idx) => {
-              const typeMeta = TYPE_META[tc.type]         ?? TYPE_META.manual
-              const priMeta  = PRIORITY_META[tc.priority] ?? PRIORITY_META.medium
-              const isExisting = existingCycleIds.has(tc.id)
-              const isSelected = addSelectIds.has(tc.id)
-              const isLast = idx === (addSubMap[addBrowseSub] ?? []).length - 1
+              const tm = TYPE_META[tc.type] ?? TYPE_META.manual
+              const pm = PRIORITY_META[tc.priority] ?? PRIORITY_META.medium
+              const isEx = existingCycleIds.has(tc.id); const isSel = addSelectIds.has(tc.id)
               return (
                 <div key={tc.id} onClick={() => toggleAddTC(tc.id)}
-                  style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 16px', background: isExisting ? '#F0FDF4' : isSelected ? '#EFF6FF' : 'white', borderBottom: isLast ? 'none' : '1px solid #F1F5F9', cursor: isExisting ? 'default' : 'pointer', borderLeft: isExisting ? '3px solid #10B981' : isSelected ? '3px solid #3B82F6' : '3px solid transparent', transition: 'background .1s' }}>
-                  <div style={{ width: '18px', height: '18px', borderRadius: '4px', border: `2px solid ${isExisting ? '#10B981' : isSelected ? '#3B82F6' : '#D1D5DB'}`, background: isExisting ? '#10B981' : isSelected ? '#3B82F6' : 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                    {(isExisting || isSelected) && <span style={{ color: 'white', fontSize: '11px', fontWeight: 700 }}>✓</span>}
-                  </div>
-                  <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#F1F5F9', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 700, color: '#64748B', flexShrink: 0 }}>
-                    {parseSteps(tc.steps).length}
+                  style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '11px 14px', background: isEx ? '#F0FDF4' : isSel ? '#EFF6FF' : 'white', borderBottom: idx < (addSubMap[addBrowseSub] ?? []).length - 1 ? '1px solid #F1F5F9' : 'none', cursor: isEx ? 'default' : 'pointer', borderLeft: isEx ? '3px solid #10B981' : isSel ? '3px solid #3B82F6' : '3px solid transparent' }}>
+                  <div style={{ width: '16px', height: '16px', borderRadius: '4px', border: `2px solid ${isEx ? '#10B981' : isSel ? '#3B82F6' : '#D1D5DB'}`, background: isEx ? '#10B981' : isSel ? '#3B82F6' : 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    {(isEx || isSel) && <span style={{ color: 'white', fontSize: '10px', fontWeight: 700 }}>✓</span>}
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 600, fontSize: '13px', color: '#1E293B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tc.title}</div>
-                    <div style={{ fontSize: '10px', color: '#94A3B8', marginTop: '2px', fontFamily: 'monospace' }}>TC-{String(tc.id).padStart(3, '0')}</div>
+                    <div style={{ fontSize: '10px', color: '#94A3B8', fontFamily: 'monospace' }}>TC-{String(tc.id).padStart(3, '0')}</div>
                   </div>
-                  <span style={{ fontSize: '11px', fontWeight: 600, padding: '2px 8px', borderRadius: '8px', background: typeMeta.bg, color: typeMeta.color, border: `1px solid ${typeMeta.border}`, flexShrink: 0 }}>{typeMeta.icon}</span>
-                  <span style={{ fontSize: '11px', fontWeight: 700, color: priMeta.color, flexShrink: 0 }}>{priMeta.dot} {priMeta.label}</span>
-                  {isExisting
-                    ? <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 9px', borderRadius: '8px', background: '#D1FAE5', color: '#059669', flexShrink: 0, whiteSpace: 'nowrap' }}>✓ 이미 추가됨</span>
+                  <span style={{ fontSize: '11px', fontWeight: 600, padding: '2px 7px', borderRadius: '8px', background: tm.bg, color: tm.color, border: `1px solid ${tm.border}`, flexShrink: 0 }}>{tm.icon}</span>
+                  <span style={{ fontSize: '11px', fontWeight: 700, color: pm.color, flexShrink: 0 }}>{pm.dot}</span>
+                  {isEx
+                    ? <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 9px', borderRadius: '8px', background: '#D1FAE5', color: '#059669', flexShrink: 0 }}>✓ 이미 추가됨</span>
                     : tcNeedsReview(tc) && <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '8px', background: '#FEF3C7', color: '#92400E', flexShrink: 0 }}>⚠️ 검토 필요</span>
                   }
                 </div>
               )
             })}
           </div>
-
         ) : addBrowseParent && !addBrowseSub ? (
-          // Level 2: sub list
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {addSubList.map(sub => {
-              const subTCs  = addSubMap[sub]
-              const existN  = subTCs.filter(t => existingCycleIds.has(t.id)).length
-              const selN    = subTCs.filter(t => addSelectIds.has(t.id)).length
-              const revN    = subTCs.filter(tcNeedsReview).length
+              const sts = addSubMap[sub]; const exN = sts.filter(t => existingCycleIds.has(t.id)).length; const selN = sts.filter(t => addSelectIds.has(t.id)).length
               return (
                 <div key={sub} onClick={() => setAddBrowseSub(sub)}
-                  style={{ border: '1px solid var(--gray-200)', borderRadius: '10px', padding: '14px 18px', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '12px', transition: 'all .15s' }}
-                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--primary)' }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--gray-200)' }}>
-                  <div style={{ width: '36px', height: '36px', borderRadius: '8px', background: '#F1F5F9', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 }}>📋</div>
+                  style={{ border: '1px solid #E2E8F0', borderRadius: '10px', padding: '13px 16px', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px' }}
+                  onMouseEnter={e => (e.currentTarget as HTMLElement).style.borderColor = 'var(--primary)'}
+                  onMouseLeave={e => (e.currentTarget as HTMLElement).style.borderColor = '#E2E8F0'}>
+                  <span style={{ fontSize: '20px' }}>📋</span>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 600, fontSize: '14px', color: '#1E293B', marginBottom: '4px' }}>{sub}</div>
-                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: '11px', color: '#6B7280' }}>TC {subTCs.length}개</span>
-                      {existN > 0 && <span style={{ fontSize: '11px', padding: '1px 7px', borderRadius: '8px', background: '#D1FAE5', color: '#059669', fontWeight: 700 }}>✓ 추가됨 {existN}</span>}
-                      {selN  > 0 && <span style={{ fontSize: '11px', padding: '1px 7px', borderRadius: '8px', background: '#EFF6FF', color: '#2563EB', fontWeight: 700 }}>선택 {selN}</span>}
-                      {revN  > 0 && <span style={{ fontSize: '11px', padding: '1px 7px', borderRadius: '8px', background: '#FEF3C7', color: '#92400E', fontWeight: 600 }}>⚠️ 검토 {revN}</span>}
+                    <div style={{ fontWeight: 600, fontSize: '13px', color: '#1E293B' }}>{sub}</div>
+                    <div style={{ display: 'flex', gap: '6px', marginTop: '3px', flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '11px', color: '#6B7280' }}>TC {sts.length}개</span>
+                      {exN > 0 && <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '8px', background: '#D1FAE5', color: '#059669', fontWeight: 700 }}>✓ {exN}</span>}
+                      {selN > 0 && <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '8px', background: '#EFF6FF', color: '#2563EB', fontWeight: 700 }}>선택 {selN}</span>}
                     </div>
                   </div>
-                  <span style={{ fontSize: '16px', color: '#CBD5E1' }}>›</span>
+                  <span style={{ color: '#CBD5E1', fontSize: '16px' }}>›</span>
                 </div>
               )
             })}
           </div>
-
         ) : (
-          // Level 1: parent list
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {parentList.map(parent => {
-              const subs   = parentMap[parent]
-              const allTCs = Object.values(subs).flat()
-              const existN = allTCs.filter(t => existingCycleIds.has(t.id)).length
-              const selN   = allTCs.filter(t => addSelectIds.has(t.id)).length
-              const revN   = allTCs.filter(tcNeedsReview).length
+              const allTCs = Object.values(parentMap[parent]).flat()
+              const exN = allTCs.filter(t => existingCycleIds.has(t.id)).length
+              const selN = allTCs.filter(t => addSelectIds.has(t.id)).length
               return (
                 <div key={parent} onClick={() => setAddBrowseParent(parent)}
-                  style={{ border: '1px solid var(--gray-200)', borderRadius: '12px', padding: '16px 18px', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '14px', transition: 'all .15s' }}
+                  style={{ border: '1px solid #E2E8F0', borderRadius: '12px', padding: '14px 16px', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '12px' }}
                   onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--primary)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 2px 12px rgba(79,70,229,.1)' }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--gray-200)'; (e.currentTarget as HTMLElement).style.boxShadow = 'none' }}>
-                  <div style={{ width: '44px', height: '44px', borderRadius: '12px', background: 'var(--primary-light)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '22px', flexShrink: 0 }}>📁</div>
+                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = '#E2E8F0'; (e.currentTarget as HTMLElement).style.boxShadow = 'none' }}>
+                  <span style={{ fontSize: '24px' }}>📁</span>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 700, fontSize: '15px', color: '#1E293B', marginBottom: '5px' }}>{parent}</div>
-                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                    <div style={{ fontWeight: 700, fontSize: '14px', color: '#1E293B' }}>{parent}</div>
+                    <div style={{ display: 'flex', gap: '6px', marginTop: '3px', flexWrap: 'wrap' }}>
                       <span style={{ fontSize: '11px', color: '#6B7280' }}>TC {allTCs.length}개</span>
-                      {existN > 0 && <span style={{ fontSize: '11px', padding: '1px 7px', borderRadius: '8px', background: '#D1FAE5', color: '#059669', fontWeight: 700 }}>✓ 추가됨 {existN}</span>}
-                      {selN  > 0 && <span style={{ fontSize: '11px', padding: '1px 7px', borderRadius: '8px', background: '#EFF6FF', color: '#2563EB', fontWeight: 700 }}>선택 {selN}</span>}
-                      {revN  > 0 && <span style={{ fontSize: '11px', padding: '1px 7px', borderRadius: '8px', background: '#FEF3C7', color: '#92400E', fontWeight: 600 }}>⚠️ {revN}</span>}
+                      {exN > 0 && <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '8px', background: '#D1FAE5', color: '#059669', fontWeight: 700 }}>✓ 추가됨 {exN}</span>}
+                      {selN > 0 && <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '8px', background: '#EFF6FF', color: '#2563EB', fontWeight: 700 }}>선택 {selN}</span>}
                     </div>
                   </div>
+                  <span style={{ color: '#CBD5E1', fontSize: '18px' }}>›</span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </>
+    )
+  }
+  // ③ Cycle execution view
+  else if (activeCycle) {
+    const planName = testPlans.find(p => p.cycles.some(c => c.id === activeCycle.id))?.name
+    // Group by parent module
+    const groups: Array<{ module: string; entries: Array<{ item: CycleCase; flatIdx: number }> }> = []
+    const groupMap: Record<string, typeof groups[0]> = {}
+    cycleItems.forEach((item, flatIdx) => {
+      const { parent } = splitModule(item.module || '기타')
+      if (!groupMap[parent]) { const g = { module: parent, entries: [] }; groupMap[parent] = g; groups.push(g) }
+      groupMap[parent].entries.push({ item, flatIdx })
+    })
+    const allIds       = cycleItems.map(i => i.id)
+    const allSelAll    = allIds.length > 0 && allIds.every(id => selCycleIds.has(id))
+    const someSel      = allIds.some(id => selCycleIds.has(id))
+    const passN = cycleItems.filter(i => i.cycle_status === 'pass').length
+    const failN = cycleItems.filter(i => i.cycle_status === 'fail').length
+    const naN   = cycleItems.filter(i => i.cycle_status === 'na').length
+    const doneN = passN + failN + naN
+    const csm   = CYCLE_STATUS_META[activeCycle.status] ?? CYCLE_STATUS_META.not_started
+
+    rightContent = (
+      <>
+        {/* Breadcrumb */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '12px', fontSize: '13px', flexWrap: 'wrap' }}>
+          <button onClick={() => { setActiveCycle(null); setCycleItems([]); setSelCycleIds(new Set()) }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', fontWeight: 600, padding: 0 }}>← TC 라이브러리</button>
+          {planName && <><span style={{ color: '#CBD5E1' }}>›</span><span style={{ color: '#64748B', fontSize: '12px' }}>📐 {planName}</span></>}
+          <span style={{ color: '#CBD5E1' }}>›</span>
+          <span style={{ fontWeight: 600, color: '#1E293B' }}>📋 {activeCycle.name}</span>
+        </div>
+
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700, fontSize: '17px', color: '#1E293B' }}>{activeCycle.name}</div>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '4px', flexWrap: 'wrap', alignItems: 'center' }}>
+              <span style={{ fontSize: '11px', fontWeight: 700, padding: '2px 9px', borderRadius: '8px', background: csm.bg, color: csm.color, border: `1px solid ${csm.border}` }}>{csm.label}</span>
+              <span style={{ fontSize: '11px', color: '#64748B' }}>{cycleItems.length}개 TC</span>
+            </div>
+          </div>
+          <button onClick={() => openAddTCPanel(activeCycle, true)}
+            style={{ fontSize: '12px', fontWeight: 600, padding: '6px 14px', borderRadius: '7px', border: '1px solid #10B981', background: '#ECFDF5', cursor: 'pointer', color: '#059669', whiteSpace: 'nowrap' }}>
+            + TC 추가
+          </button>
+        </div>
+
+        {/* Progress bar */}
+        {cycleItems.length > 0 && (
+          <div style={{ marginBottom: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#94A3B8', marginBottom: '4px' }}>
+              <span>진행률</span>
+              <span style={{ fontWeight: 600 }}>{doneN}/{cycleItems.length} · Pass {passN} · Fail {failN} · N/A {naN}</span>
+            </div>
+            <div style={{ height: '6px', background: '#E2E8F0', borderRadius: '3px', overflow: 'hidden', display: 'flex' }}>
+              <div style={{ height: '100%', background: '#16A34A', width: `${(passN / cycleItems.length) * 100}%`, transition: 'width .3s' }} />
+              <div style={{ height: '100%', background: '#DC2626', width: `${(failN / cycleItems.length) * 100}%`, transition: 'width .3s' }} />
+              <div style={{ height: '100%', background: '#94A3B8', width: `${(naN / cycleItems.length) * 100}%`, transition: 'width .3s' }} />
+            </div>
+          </div>
+        )}
+
+        {/* Bulk action bar */}
+        {selCycleIds.size > 0 && (
+          <div style={{ position: 'sticky', top: '8px', zIndex: 10, background: '#1E293B', color: 'white', borderRadius: '10px', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', boxShadow: '0 4px 24px rgba(0,0,0,.28)' }}>
+            <span style={{ flex: 1, fontSize: '12px', fontWeight: 600 }}>✓ {selCycleIds.size}개 선택됨</span>
+            {([{ val: 'pass' as StepStatus, icon: '✓', label: 'Pass', color: '#16A34A', bg: '#DCFCE7' }, { val: 'fail' as StepStatus, icon: '✗', label: 'Fail', color: '#DC2626', bg: '#FEE2E2' }, { val: 'na' as StepStatus, icon: '—', label: 'N/A', color: '#64748B', bg: '#F1F5F9' }]).map(btn => (
+              <button key={btn.val} onClick={() => bulkUpdateStatus(btn.val)} disabled={bulkActing}
+                style={{ fontSize: '12px', fontWeight: 700, padding: '5px 12px', borderRadius: '6px', border: 'none', background: btn.bg, color: btn.color, cursor: 'pointer', opacity: bulkActing ? 0.7 : 1 }}>
+                {btn.icon} {btn.label}
+              </button>
+            ))}
+            <button onClick={() => setSelCycleIds(new Set())}
+              style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '6px', border: '1px solid rgba(255,255,255,.25)', background: 'transparent', color: 'rgba(255,255,255,.7)', cursor: 'pointer' }}>
+              해제
+            </button>
+          </div>
+        )}
+
+        {cycleLoading ? (
+          <div style={{ textAlign: 'center', padding: '30px', color: '#94A3B8', fontSize: '13px' }}>불러오는 중...</div>
+        ) : cycleItems.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '40px', color: '#94A3B8', fontSize: '13px', border: '1px dashed #E2E8F0', borderRadius: '10px' }}>
+            TC가 없습니다. <strong>+ TC 추가</strong> 버튼으로 케이스를 추가하세요.
+          </div>
+        ) : (
+          <div style={{ border: '1px solid #E2E8F0', borderRadius: '10px', overflow: 'hidden' }}>
+            {/* 전체 선택 헤더 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 14px', background: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
+              <ICheckbox checked={allSelAll} indeterminate={someSel && !allSelAll} onChange={() => toggleModuleGroup(allIds, allSelAll)} />
+              <span style={{ flex: 1, fontSize: '11px', fontWeight: 700, color: '#64748B' }}>전체 선택 ({cycleItems.length}개)</span>
+              <span style={{ fontSize: '10px', color: '#94A3B8' }}>Shift+클릭으로 범위 선택</span>
+            </div>
+
+            {/* 모듈 그룹 */}
+            {groups.map(({ module, entries }) => {
+              const groupIds     = entries.map(e => e.item.id)
+              const allGroupSel  = groupIds.every(id => selCycleIds.has(id))
+              const someGroupSel = groupIds.some(id => selCycleIds.has(id))
+              const gPassN = entries.filter(e => e.item.cycle_status === 'pass').length
+              const gFailN = entries.filter(e => e.item.cycle_status === 'fail').length
+
+              return (
+                <div key={module}>
+                  {/* 그룹 헤더 */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 14px', background: '#F1F5F9', borderBottom: '1px solid #E2E8F0', borderTop: '1px solid #E2E8F0' }}>
+                    <ICheckbox checked={allGroupSel} indeterminate={someGroupSel && !allGroupSel} onChange={() => toggleModuleGroup(groupIds, allGroupSel)} />
+                    <span style={{ flex: 1, fontSize: '12px', fontWeight: 700, color: '#374151' }}>📁 {module} 전체 ({entries.length}개)</span>
+                    {(gPassN > 0 || gFailN > 0) && (
+                      <span style={{ fontSize: '10px', color: '#94A3B8' }}>
+                        {gPassN > 0 && <span style={{ color: '#059669', fontWeight: 700 }}>Pass {gPassN} </span>}
+                        {gFailN > 0 && <span style={{ color: '#DC2626', fontWeight: 700 }}>Fail {gFailN}</span>}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* TC 행 */}
+                  {entries.map(({ item, flatIdx }, idx) => {
+                    const tm      = TYPE_META[item.type]         ?? TYPE_META.manual
+                    const pm      = PRIORITY_META[item.priority] ?? PRIORITY_META.medium
+                    const ccm     = CYCLE_CASE_META[item.cycle_status] ?? CYCLE_CASE_META.pending
+                    const isSel   = selCycleIds.has(item.id)
+                    const isLast  = idx === entries.length - 1
+                    return (
+                      <div key={item.id}
+                        onClick={e => handleCycleCaseClick(item.id, flatIdx, e.shiftKey)}
+                        style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', background: isSel ? '#EFF6FF' : 'white', borderBottom: isLast ? 'none' : '1px solid #F1F5F9', cursor: 'pointer', userSelect: 'none', transition: 'background .1s' }}
+                        onMouseEnter={e => { if (!isSel) (e.currentTarget as HTMLElement).style.background = '#F8FAFC' }}
+                        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = isSel ? '#EFF6FF' : 'white' }}>
+                        {/* 체크박스 (시각적) */}
+                        <div onClick={e => { e.stopPropagation(); handleCycleCaseClick(item.id, flatIdx, e.shiftKey) }}
+                          style={{ width: '16px', height: '16px', borderRadius: '4px', border: `2px solid ${isSel ? '#3B82F6' : '#D1D5DB'}`, background: isSel ? '#3B82F6' : 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                          {isSel && <span style={{ color: 'white', fontSize: '10px', fontWeight: 700 }}>✓</span>}
+                        </div>
+                        {/* 상태 아이콘 */}
+                        <div style={{ width: '24px', height: '24px', borderRadius: '6px', background: ccm.bg, color: ccm.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700, flexShrink: 0 }}>{ccm.icon}</div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: '13px', color: '#1E293B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.title}</div>
+                          <div style={{ fontSize: '10px', color: '#94A3B8', fontFamily: 'monospace' }}>TC-{String(item.test_case_id).padStart(3, '0')}</div>
+                        </div>
+                        <span style={{ fontSize: '11px', fontWeight: 600, padding: '2px 7px', borderRadius: '8px', background: tm.bg, color: tm.color, border: `1px solid ${tm.border}`, flexShrink: 0 }}>{tm.icon}</span>
+                        <span style={{ fontSize: '10px', fontWeight: 700, color: pm.color, flexShrink: 0 }}>{pm.dot}</span>
+                        <span style={{ fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '8px', background: ccm.bg, color: ccm.color, flexShrink: 0, whiteSpace: 'nowrap' }}>{ccm.label}</span>
+                        <button onClick={e => { e.stopPropagation(); setCycleTC(item) }}
+                          style={{ fontSize: '11px', fontWeight: 600, padding: '4px 10px', borderRadius: '6px', border: '1px solid #3B82F6', background: '#EFF6FF', cursor: 'pointer', color: '#2563EB', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                          단계 실행
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </>
+    )
+  }
+  // ④ Library TC step detail (edit only)
+  else if (selectedTC) {
+    rightContent = (
+      <TCStepDetail
+        tc={selectedTC} breadcrumb={<LibBreadcrumb />}
+        onBack={() => setSelectedTC(null)} onStatusChange={() => {}}
+        onExpectedChange={(tcId, expected) => {
+          setTcs(prev => prev.map(t => t.id === tcId ? { ...t, expected } : t))
+          setSelectedTC(prev => prev ? { ...prev, expected } : prev)
+        }}
+        selectedParent={selectedParent ?? ''} selectedSub={selectedSub ?? ''}
+      />
+    )
+  }
+  // ⑤ Level 3 — TC list
+  else if (selectedParent && selectedSub) {
+    const subTCs = parentMap[selectedParent]?.[selectedSub] ?? []
+    rightContent = (
+      <>
+        <LibBreadcrumb />
+        <SelectionBar />
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: '12px' }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: '15px', color: '#1E293B' }}>📋 {selectedSub}</div>
+            <div style={{ fontSize: '11px', color: '#94A3B8', marginTop: '2px' }}>체크 → 사이클 추가 · 클릭 → 편집 · {subTCs.length}개</div>
+          </div>
+          <button className="btn btn-secondary btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setSelectedSub(null)}>← 뒤로</button>
+        </div>
+        <div style={{ border: '1px solid #E2E8F0', borderRadius: '10px', overflow: 'hidden' }}>
+          {subTCs.map((tc, idx) => {
+            const tm = TYPE_META[tc.type] ?? TYPE_META.manual; const pm = PRIORITY_META[tc.priority] ?? PRIORITY_META.medium
+            const needsRev = tcNeedsReview(tc); const isSel = selectedTCIds.has(tc.id)
+            return (
+              <div key={tc.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '11px 14px', background: isSel ? '#EFF6FF' : needsRev ? '#FFFBEB' : 'white', borderBottom: idx < subTCs.length - 1 ? '1px solid #F1F5F9' : 'none', borderLeft: needsRev ? '3px solid #F59E0B' : '3px solid transparent' }}>
+                <div onClick={e => { e.stopPropagation(); toggleTC(tc.id) }}
+                  style={{ width: '16px', height: '16px', borderRadius: '4px', border: `2px solid ${isSel ? '#3B82F6' : '#D1D5DB'}`, background: isSel ? '#3B82F6' : 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  {isSel && <span style={{ color: 'white', fontSize: '10px', fontWeight: 700 }}>✓</span>}
+                </div>
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', minWidth: 0 }} onClick={() => setSelectedTC(tc)}>
+                  <div style={{ width: '26px', height: '26px', borderRadius: '6px', background: '#F1F5F9', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 700, color: '#64748B', flexShrink: 0 }}>{parseSteps(tc.steps).length}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: '13px', color: '#1E293B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tc.title}</div>
+                    <div style={{ fontSize: '10px', color: '#94A3B8', fontFamily: 'monospace' }}>TC-{String(tc.id).padStart(3, '0')}</div>
+                  </div>
+                  <span style={{ fontSize: '11px', fontWeight: 600, padding: '2px 7px', borderRadius: '8px', background: tm.bg, color: tm.color, border: `1px solid ${tm.border}`, flexShrink: 0 }}>{tm.icon}</span>
+                  <span style={{ fontSize: '11px', fontWeight: 700, color: pm.color, flexShrink: 0 }}>{pm.dot} {pm.label}</span>
+                  {needsRev
+                    ? <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '8px', background: '#FEF3C7', color: '#92400E', flexShrink: 0 }}>⚠️ 검토 필요</span>
+                    : <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '8px', background: '#D1FAE5', color: '#059669', flexShrink: 0 }}>✓ 완료</span>
+                  }
+                  <span style={{ color: '#CBD5E1', flexShrink: 0 }}>›</span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </>
+    )
+  }
+  // ⑥ Level 2 — sub list
+  else if (selectedParent) {
+    const subs = parentMap[selectedParent] ?? {}
+    rightContent = (
+      <>
+        <LibBreadcrumb />
+        <SelectionBar />
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: '14px' }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: '15px', color: '#1E293B' }}>📁 {selectedParent}</div>
+            <div style={{ fontSize: '11px', color: '#94A3B8', marginTop: '2px' }}>{Object.keys(subs).length}개 세부 항목</div>
+          </div>
+          <button className="btn btn-secondary btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setSelectedParent(null)}>← 뒤로</button>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {Object.keys(subs).map(sub => {
+            const stcs = subs[sub]; const revN = stcs.filter(tcNeedsReview).length
+            return (
+              <div key={sub} onClick={() => setSelectedSub(sub)}
+                style={{ border: `1px solid ${revN > 0 ? '#FCD34D' : '#E2E8F0'}`, borderRadius: '10px', padding: '13px 16px', background: revN > 0 ? '#FFFBEB' : 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px' }}
+                onMouseEnter={e => (e.currentTarget as HTMLElement).style.borderColor = 'var(--primary)'}
+                onMouseLeave={e => (e.currentTarget as HTMLElement).style.borderColor = revN > 0 ? '#FCD34D' : '#E2E8F0'}>
+                <span style={{ fontSize: '20px' }}>📋</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: '13px', color: '#1E293B', marginBottom: '3px' }}>{sub}</div>
+                  <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '11px', color: '#6B7280' }}>TC {stcs.length}개</span>
+                    {revN > 0 && <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '8px', background: '#FEF3C7', color: '#92400E', fontWeight: 700 }}>⚠️ 검토 {revN}</span>}
+                  </div>
+                </div>
+                <span style={{ color: '#CBD5E1', fontSize: '16px' }}>›</span>
+              </div>
+            )
+          })}
+        </div>
+      </>
+    )
+  }
+  // ⑦ Level 1 — parent list (default)
+  else {
+    rightContent = (
+      <>
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: '14px', gap: '10px' }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: '16px', color: '#1E293B' }}>🧪 TC 라이브러리</div>
+            <div style={{ fontSize: '11px', color: '#94A3B8', marginTop: '2px' }}>모듈을 클릭해 검토하거나, TC를 선택해 사이클을 만드세요</div>
+          </div>
+          {projectId && (
+            <button className="btn btn-secondary btn-sm" style={{ marginLeft: 'auto' }} onClick={generateTCs} disabled={generating}>
+              {generating ? '⏳ 생성 중...' : '🔄 TC 재생성'}
+            </button>
+          )}
+        </div>
+        <SelectionBar />
+        {/* 검토 통계 */}
+        {tcs.length > 0 && (
+          <div style={{ display: 'flex', gap: '7px', marginBottom: '12px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '11px', fontWeight: 700, padding: '4px 11px', borderRadius: '20px', background: '#F3F4F6', color: '#374151' }}>전체 {tcs.length}개</span>
+            {reviewCount > 0
+              ? <span style={{ fontSize: '11px', fontWeight: 700, padding: '4px 11px', borderRadius: '20px', background: '#FEF3C7', color: '#92400E' }}>⚠️ 검토 필요 {reviewCount}개</span>
+              : <span style={{ fontSize: '11px', fontWeight: 700, padding: '4px 11px', borderRadius: '20px', background: '#D1FAE5', color: '#059669' }}>✓ 전체 작성 완료</span>
+            }
+          </div>
+        )}
+        {error && <div className="alert alert-error" style={{ marginBottom: '12px' }}>❌ {error}</div>}
+        {loading ? (
+          <div className="card"><div className="empty-state" style={{ padding: '50px 24px' }}>
+            <div style={{ width: '32px', height: '32px', borderRadius: '50%', border: '3px solid #E5E7EB', borderTopColor: 'var(--primary)', animation: 'spin 1s linear infinite', margin: '0 auto 12px' }} />
+            <div className="empty-state-text">불러오는 중...</div>
+          </div></div>
+        ) : !projectId ? (
+          <div className="card"><div className="empty-state" style={{ padding: '50px 24px' }}>
+            <div className="empty-state-icon">📄</div>
+            <div className="empty-state-text">기획서가 없습니다</div>
+            <button className="btn btn-primary" style={{ marginTop: '14px' }} onClick={() => router.push('/upload')}>기획서 업로드 →</button>
+          </div></div>
+        ) : tcs.length === 0 ? (
+          <div className="card"><div className="empty-state" style={{ padding: '50px 24px' }}>
+            <div className="empty-state-icon">🧪</div>
+            <div className="empty-state-text">TC가 없습니다</div>
+            <button className="btn btn-primary" style={{ marginTop: '14px' }} onClick={generateTCs} disabled={generating}>
+              {generating ? '⏳ 생성 중...' : '🧪 TC 생성하기'}
+            </button>
+          </div></div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {parentList.map(parent => {
+              const allTCs = Object.values(parentMap[parent]).flat()
+              const revN   = allTCs.filter(tcNeedsReview).length
+              return (
+                <div key={parent} onClick={() => setSelectedParent(parent)}
+                  style={{ border: `1px solid ${revN > 0 ? '#FCD34D' : '#E2E8F0'}`, borderRadius: '12px', padding: '14px 16px', background: revN > 0 ? '#FFFBEB' : 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '12px', transition: 'all .15s' }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--primary)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 2px 12px rgba(79,70,229,.1)' }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = revN > 0 ? '#FCD34D' : '#E2E8F0'; (e.currentTarget as HTMLElement).style.boxShadow = 'none' }}>
+                  <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'var(--primary-light)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', flexShrink: 0 }}>📁</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: '14px', color: '#1E293B', marginBottom: '4px' }}>{parent}</div>
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '11px', color: '#6B7280' }}>하위 {Object.keys(parentMap[parent]).length}개 · TC {allTCs.length}개</span>
+                      {revN > 0 && <span style={{ fontSize: '11px', padding: '1px 7px', borderRadius: '8px', background: '#FEF3C7', color: '#92400E', fontWeight: 700 }}>⚠️ 검토 {revN}</span>}
+                    </div>
+                  </div>
+                  {revN === 0 && <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 9px', borderRadius: '10px', background: '#D1FAE5', color: '#059669', flexShrink: 0 }}>✓</span>}
                   <span style={{ fontSize: '18px', color: '#CBD5E1' }}>›</span>
                 </div>
               )
@@ -803,244 +909,126 @@ function TCListPageContent() {
     )
   }
 
-  // ② Cycle execution view
-  if (activeCycle) {
-    const plan = testPlans.find(p => p.cycles.some(c => c.id === activeCycle.id))
-    return (
-      <CycleRunView
-        cycle={activeCycle}
-        planName={plan?.name}
-        items={cycleItems}
-        loading={cycleLoading}
-        onBack={() => { setActiveCycle(null); setCycleItems([]) }}
-        onRunTC={setCycleTC}
-        onAddTC={() => openAddTCPanel(activeCycle, true)}
-        onStatusChange={(itemId, status) =>
-          setCycleItems(prev => prev.map(i => i.id === itemId ? { ...i, cycle_status: status } : i))
-        }
-      />
-    )
-  }
-
-  // ③ Library TC step detail (edit only — no P/F)
-  if (selectedTC) {
-    return (
-      <TCStepDetail
-        tc={selectedTC}
-        breadcrumb={<LibBreadcrumb />}
-        onBack={() => setSelectedTC(null)}
-        onStatusChange={() => {}}
-        onExpectedChange={(tcId, expected) => {
-          setTcs(prev => prev.map(t => t.id === tcId ? { ...t, expected } : t))
-          setSelectedTC(prev => prev ? { ...prev, expected } : prev)
-        }}
-        selectedParent={selectedParent ?? ''}
-        selectedSub={selectedSub ?? ''}
-      />
-    )
-  }
-
-  // ────────────────────────────────────────────────────────────────────
-  // ④ LIBRARY VIEWS
-  // ────────────────────────────────────────────────────────────────────
-
-  // Level 2 — sub-module list
-  if (selectedParent && !selectedSub) {
-    const subs    = parentMap[selectedParent] ?? {}
-    const subList = Object.keys(subs)
-    return (
-      <>
-        <LibBreadcrumb />
-        <SelectionBar />
-        <div style={{ display: 'flex', alignItems: 'center', marginBottom: '16px' }}>
-          <div>
-            <div style={{ fontWeight: 700, fontSize: '16px', color: '#1E293B' }}>📁 {selectedParent}</div>
-            <div style={{ fontSize: '11px', color: '#94A3B8', marginTop: '3px' }}>세부 항목 선택 · {subList.length}개</div>
-          </div>
-          <button className="btn btn-secondary btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setSelectedParent(null)}>← 뒤로</button>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {subList.map(sub => {
-            const subTCs  = subs[sub]
-            const autoN   = subTCs.filter(t => t.type === 'auto').length
-            const manualN = subTCs.filter(t => t.type === 'manual').length
-            const critN   = subTCs.filter(t => t.priority === 'critical').length
-            const reviewN = subTCs.filter(tcNeedsReview).length
-            return (
-              <div key={sub} onClick={() => setSelectedSub(sub)}
-                style={{ border: `1px solid ${reviewN > 0 ? '#FCD34D' : 'var(--gray-200)'}`, borderRadius: '10px', padding: '14px 18px', background: reviewN > 0 ? '#FFFBEB' : 'white', cursor: 'pointer', transition: 'all .15s', display: 'flex', alignItems: 'center', gap: '12px' }}
-                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--primary)'; (e.currentTarget as HTMLElement).style.background = '#FAFBFF' }}
-                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = reviewN > 0 ? '#FCD34D' : 'var(--gray-200)'; (e.currentTarget as HTMLElement).style.background = reviewN > 0 ? '#FFFBEB' : 'white' }}>
-                <div style={{ width: '36px', height: '36px', borderRadius: '8px', background: '#F1F5F9', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 }}>📋</div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, fontSize: '14px', color: '#1E293B', marginBottom: '4px' }}>{sub}</div>
-                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: '11px', color: '#6B7280' }}>TC {subTCs.length}개</span>
-                    {autoN   > 0 && <span style={{ fontSize: '11px', padding: '1px 7px', borderRadius: '8px', background: '#EEF2FF', color: '#4F46E5', fontWeight: 600 }}>🤖 {autoN}</span>}
-                    {manualN > 0 && <span style={{ fontSize: '11px', padding: '1px 7px', borderRadius: '8px', background: '#E0F2FE', color: '#0891B2', fontWeight: 600 }}>👤 {manualN}</span>}
-                    {critN   > 0 && <span style={{ fontSize: '11px', padding: '1px 7px', borderRadius: '8px', background: '#FEF2F2', color: '#EF4444', fontWeight: 600 }}>🔴 {critN}</span>}
-                    {reviewN > 0 && <span style={{ fontSize: '11px', padding: '1px 7px', borderRadius: '8px', background: '#FEF3C7', color: '#92400E', fontWeight: 700 }}>⚠️ 검토 필요 {reviewN}</span>}
-                  </div>
-                </div>
-                <span style={{ fontSize: '16px', color: '#CBD5E1' }}>›</span>
-              </div>
-            )
-          })}
-        </div>
-      </>
-    )
-  }
-
-  // Level 3 — TC list with checkboxes + review indicator
-  if (selectedParent && selectedSub) {
-    const subTCs = parentMap[selectedParent]?.[selectedSub] ?? []
-    return (
-      <>
-        <LibBreadcrumb />
-        <SelectionBar />
-        <div style={{ display: 'flex', alignItems: 'center', marginBottom: '14px' }}>
-          <div>
-            <div style={{ fontSize: '11px', color: '#94A3B8', marginBottom: '2px' }}>📁 {selectedParent}</div>
-            <div style={{ fontWeight: 700, fontSize: '16px', color: '#1E293B' }}>📋 {selectedSub}</div>
-            <div style={{ fontSize: '11px', color: '#94A3B8', marginTop: '3px' }}>체크 → 사이클 추가 · 클릭 → 단계 편집 · {subTCs.length}개</div>
-          </div>
-          <button className="btn btn-secondary btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setSelectedSub(null)}>← 뒤로</button>
-        </div>
-        <div style={{ border: '1px solid var(--gray-200)', borderRadius: '10px', overflow: 'hidden' }}>
-          {subTCs.map((tc, idx) => {
-            const typeMeta = TYPE_META[tc.type]         ?? TYPE_META.manual
-            const priMeta  = PRIORITY_META[tc.priority] ?? PRIORITY_META.medium
-            const needsRev = tcNeedsReview(tc)
-            const isSel    = selectedTCIds.has(tc.id)
-            const isLast   = idx === subTCs.length - 1
-            return (
-              <div key={tc.id} style={{
-                display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 16px',
-                background: isSel ? '#EFF6FF' : needsRev ? '#FFFBEB' : 'white',
-                borderBottom: isLast ? 'none' : '1px solid #F1F5F9',
-                borderLeft: needsRev ? '3px solid #F59E0B' : '3px solid transparent',
-                transition: 'background .1s',
-              }}>
-                {/* Checkbox */}
-                <div onClick={e => { e.stopPropagation(); toggleTC(tc.id) }}
-                  style={{ width: '18px', height: '18px', borderRadius: '4px', border: `2px solid ${isSel ? '#3B82F6' : '#D1D5DB'}`, background: isSel ? '#3B82F6' : 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                  {isSel && <span style={{ color: 'white', fontSize: '11px', fontWeight: 700 }}>✓</span>}
-                </div>
-
-                {/* TC info (click to open detail) */}
-                <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', minWidth: 0 }} onClick={() => setSelectedTC(tc)}>
-                  <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#F1F5F9', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 700, color: '#64748B', flexShrink: 0 }}>
-                    {parseSteps(tc.steps).length}
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: '13px', color: '#1E293B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tc.title}</div>
-                    <div style={{ fontSize: '10px', color: '#94A3B8', marginTop: '2px', fontFamily: 'monospace' }}>TC-{String(tc.id).padStart(3, '0')}</div>
-                  </div>
-                  <span style={{ fontSize: '11px', fontWeight: 600, padding: '2px 8px', borderRadius: '10px', background: typeMeta.bg, color: typeMeta.color, border: `1px solid ${typeMeta.border}`, flexShrink: 0 }}>{typeMeta.icon}</span>
-                  <span style={{ fontSize: '11px', fontWeight: 700, color: priMeta.color, flexShrink: 0 }}>{priMeta.dot} {priMeta.label}</span>
-                  {needsRev
-                    ? <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '8px', background: '#FEF3C7', color: '#92400E', flexShrink: 0 }}>⚠️ 검토 필요</span>
-                    : <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '8px', background: '#D1FAE5', color: '#059669', flexShrink: 0 }}>✓ 작성 완료</span>
-                  }
-                  <span style={{ fontSize: '16px', color: '#CBD5E1', flexShrink: 0 }}>›</span>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      </>
-    )
-  }
-
-  // Level 1 — parent module list
+  // ── TWO-COLUMN LAYOUT ──────────────────────────────────────────────
   return (
-    <>
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: '16px' }}>
-        <div>
-          <div className="page-title">🧪 TC 목록</div>
-          <div className="page-subtitle">
-            TC를 선택해 사이클을 만들거나, 모듈을 클릭해 검토하세요
+    <div style={{ display: 'flex', gap: '0', alignItems: 'flex-start', minHeight: '100%' }}>
+
+      {/* ── LEFT: Plan & Cycle sidebar ── */}
+      <div style={{ width: '252px', flexShrink: 0, borderRight: '1px solid #E2E8F0', paddingRight: '14px' }}>
+
+        {/* Stats */}
+        <div style={{ marginBottom: '10px', paddingBottom: '10px', borderBottom: '1px solid #F1F5F9' }}>
+          <div style={{ fontSize: '10px', fontWeight: 700, color: '#94A3B8', letterSpacing: '.06em', textTransform: 'uppercase', marginBottom: '4px' }}>TC 현황</div>
+          <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '8px', background: '#F3F4F6', color: '#374151', fontWeight: 600 }}>전체 {tcs.length}</span>
+            {reviewCount > 0
+              ? <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '8px', background: '#FEF3C7', color: '#92400E', fontWeight: 700 }}>⚠️ {reviewCount}</span>
+              : tcs.length > 0 && <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '8px', background: '#D1FAE5', color: '#059669', fontWeight: 700 }}>✓ 완료</span>
+            }
           </div>
         </div>
-        {projectId && (
-          <button className="btn btn-secondary btn-sm" style={{ marginLeft: 'auto' }} onClick={generateTCs} disabled={generating}>
-            {generating ? '⏳ 생성 중...' : '🔄 TC 재생성'}
+
+        {/* Plan section */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '7px' }}>
+          <span style={{ fontSize: '10px', fontWeight: 700, color: '#94A3B8', letterSpacing: '.06em', textTransform: 'uppercase' }}>플랜 & 사이클</span>
+          <button onClick={() => setShowNewPlan(v => !v)}
+            style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '5px', border: '1px solid #D1D5DB', background: 'white', cursor: 'pointer', color: '#6B7280', fontWeight: 600 }}>
+            + 플랜
           </button>
+        </div>
+
+        {showNewPlan && (
+          <div style={{ display: 'flex', gap: '4px', alignItems: 'center', marginBottom: '7px' }}>
+            <input autoFocus placeholder="플랜 이름..." value={newPlanName} onChange={e => setNewPlanName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') createPlan(); if (e.key === 'Escape') { setShowNewPlan(false); setNewPlanName('') } }}
+              style={{ flex: 1, padding: '5px 8px', borderRadius: '5px', border: '1.5px solid #93C5FD', outline: 'none', fontSize: '11px' }} />
+            <button onClick={createPlan} disabled={planSaving || !newPlanName.trim()}
+              style={{ padding: '4px 8px', borderRadius: '5px', border: 'none', background: '#3B82F6', color: 'white', cursor: 'pointer', fontWeight: 700, fontSize: '11px' }}>✓</button>
+            <button onClick={() => { setShowNewPlan(false); setNewPlanName('') }}
+              style={{ padding: '4px 8px', borderRadius: '5px', border: '1px solid #D1D5DB', background: 'white', cursor: 'pointer', fontSize: '11px' }}>✕</button>
+          </div>
         )}
+
+        {testPlans.length === 0 && !showNewPlan && (
+          <div style={{ fontSize: '11px', color: '#9CA3AF', textAlign: 'center', padding: '16px 0' }}>플랜이 없습니다</div>
+        )}
+
+        {testPlans.map(plan => {
+          const isExp = expandedPlanIds.has(plan.id)
+          return (
+            <div key={plan.id} style={{ marginBottom: '3px' }}>
+              <div onClick={() => setExpandedPlanIds(prev => { const n = new Set(prev); n.has(plan.id) ? n.delete(plan.id) : n.add(plan.id); return n })}
+                style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '6px 8px', borderRadius: '7px', cursor: 'pointer', background: isExp ? '#F0F9FF' : 'transparent', userSelect: 'none', transition: 'background .12s' }}
+                onMouseEnter={e => { if (!isExp) (e.currentTarget as HTMLElement).style.background = '#F8FAFC' }}
+                onMouseLeave={e => { if (!isExp) (e.currentTarget as HTMLElement).style.background = 'transparent' }}>
+                <span style={{ fontSize: '8px', color: '#94A3B8', display: 'inline-block', transition: 'transform .15s', transform: isExp ? 'rotate(90deg)' : 'none', flexShrink: 0 }}>▶</span>
+                <span style={{ flex: 1, fontSize: '12px', fontWeight: 600, color: '#1E293B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{plan.name}</span>
+                <button onClick={e => { e.stopPropagation(); setShowNewCycleFor(plan.id); setExpandedPlanIds(prev => new Set(Array.from(prev).concat(plan.id))) }}
+                  style={{ fontSize: '9px', padding: '2px 6px', borderRadius: '4px', border: '1px solid #D1D5DB', background: 'white', cursor: 'pointer', color: '#9CA3AF', flexShrink: 0 }}>
+                  + 사이클
+                </button>
+              </div>
+
+              {isExp && (
+                <div style={{ marginLeft: '13px', marginBottom: '3px' }}>
+                  {plan.cycles.length === 0 && showNewCycleFor !== plan.id && (
+                    <div style={{ fontSize: '10px', color: '#9CA3AF', padding: '5px 7px' }}>사이클 없음</div>
+                  )}
+                  {plan.cycles.map(cycle => {
+                    const csm    = CYCLE_STATUS_META[cycle.status] ?? CYCLE_STATUS_META.not_started
+                    const isAct  = activeCycle?.id === cycle.id
+                    const pct    = cycle.tcCount > 0 ? Math.round((cycle.passCount + cycle.failCount) / cycle.tcCount * 100) : 0
+                    return (
+                      <div key={cycle.id} style={{ padding: '5px 7px', borderRadius: '6px', marginBottom: '2px', background: isAct ? '#EFF6FF' : 'transparent', border: `1px solid ${isAct ? '#BFDBFE' : 'transparent'}`, transition: 'all .12s' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '3px' }}>
+                          <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: csm.color, flexShrink: 0 }} />
+                          <span style={{ flex: 1, fontSize: '11px', fontWeight: 600, color: '#1E293B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cycle.name}</span>
+                          <span style={{ fontSize: '9px', fontWeight: 700, padding: '1px 5px', borderRadius: '6px', background: csm.bg, color: csm.color, border: `1px solid ${csm.border}`, flexShrink: 0 }}>{csm.label}</span>
+                        </div>
+                        {cycle.tcCount > 0 && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '4px', paddingLeft: '11px' }}>
+                            <div style={{ height: '3px', flex: 1, background: '#E2E8F0', borderRadius: '2px', overflow: 'hidden' }}>
+                              <div style={{ height: '100%', background: cycle.failCount > 0 ? '#DC2626' : '#16A34A', width: `${pct}%`, transition: 'width .3s' }} />
+                            </div>
+                            <span style={{ fontSize: '9px', color: '#94A3B8', flexShrink: 0 }}>{cycle.tcCount}TC · {pct}%</span>
+                          </div>
+                        )}
+                        <div style={{ display: 'flex', gap: '3px', paddingLeft: '11px' }}>
+                          <button onClick={() => openCycleRun(cycle)}
+                            style={{ flex: 1, fontSize: '10px', fontWeight: 600, padding: '3px 5px', borderRadius: '5px', border: `1px solid ${isAct ? '#3B82F6' : '#3B82F6'}`, background: isAct ? '#3B82F6' : '#EFF6FF', cursor: 'pointer', color: isAct ? 'white' : '#2563EB', whiteSpace: 'nowrap' }}>
+                            {isAct ? '● 실행중' : '실행 →'}
+                          </button>
+                          <button onClick={() => openAddTCPanel(cycle, false)}
+                            style={{ fontSize: '10px', fontWeight: 600, padding: '3px 7px', borderRadius: '5px', border: '1px solid #10B981', background: '#ECFDF5', cursor: 'pointer', color: '#059669', whiteSpace: 'nowrap' }}>
+                            +TC
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                  {showNewCycleFor === plan.id && (
+                    <div style={{ padding: '5px 7px', display: 'flex', gap: '4px', alignItems: 'center' }}>
+                      <input autoFocus placeholder="사이클 이름..." value={newCycleName} onChange={e => setNewCycleName(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') createCycleUnderPlan(plan.id); if (e.key === 'Escape') { setShowNewCycleFor(null); setNewCycleName('') } }}
+                        style={{ flex: 1, padding: '4px 6px', borderRadius: '5px', border: '1.5px solid #93C5FD', outline: 'none', fontSize: '11px' }} />
+                      <button onClick={() => createCycleUnderPlan(plan.id)} disabled={planSaving || !newCycleName.trim()}
+                        style={{ padding: '3px 7px', borderRadius: '5px', border: 'none', background: '#3B82F6', color: 'white', cursor: 'pointer', fontSize: '11px' }}>✓</button>
+                      <button onClick={() => { setShowNewCycleFor(null); setNewCycleName('') }}
+                        style={{ padding: '3px 7px', borderRadius: '5px', border: '1px solid #D1D5DB', background: 'white', cursor: 'pointer', fontSize: '11px' }}>✕</button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )
+        })}
       </div>
 
-      <PlanSection />
-      <SelectionBar />
-
-      {/* Stats */}
-      {tcs.length > 0 && (
-        <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: '11px', fontWeight: 700, padding: '4px 12px', borderRadius: '20px', background: '#F3F4F6', color: '#374151' }}>전체 {tcs.length}개</span>
-          <span style={{ fontSize: '11px', padding: '4px 12px', borderRadius: '20px', background: '#F3F4F6', color: '#6B7280' }}>{parentList.length}개 모듈</span>
-          {reviewCount > 0 && (
-            <span style={{ fontSize: '11px', fontWeight: 700, padding: '4px 12px', borderRadius: '20px', background: '#FEF3C7', color: '#92400E' }}>⚠️ 검토 필요 {reviewCount}개</span>
-          )}
-          {reviewCount === 0 && tcs.length > 0 && (
-            <span style={{ fontSize: '11px', fontWeight: 700, padding: '4px 12px', borderRadius: '20px', background: '#D1FAE5', color: '#059669' }}>✓ 전체 작성 완료</span>
-          )}
-        </div>
-      )}
-
-      {error && <div className="alert alert-error" style={{ marginBottom: '12px' }}>❌ {error}</div>}
-
-      {loading ? (
-        <div className="card"><div className="empty-state" style={{ padding: '50px 24px' }}>
-          <div style={{ width: '32px', height: '32px', borderRadius: '50%', border: '3px solid #E5E7EB', borderTopColor: 'var(--primary)', animation: 'spin 1s linear infinite', margin: '0 auto 12px' }} />
-          <div className="empty-state-text">불러오는 중...</div>
-        </div></div>
-      ) : !projectId ? (
-        <div className="card"><div className="empty-state" style={{ padding: '50px 24px' }}>
-          <div className="empty-state-icon">📄</div>
-          <div className="empty-state-text">기획서가 없습니다</div>
-          <button className="btn btn-primary" style={{ marginTop: '14px' }} onClick={() => router.push('/upload')}>기획서 업로드 →</button>
-        </div></div>
-      ) : tcs.length === 0 ? (
-        <div className="card"><div className="empty-state" style={{ padding: '50px 24px' }}>
-          <div className="empty-state-icon">🧪</div>
-          <div className="empty-state-text">TC가 없습니다</div>
-          <button className="btn btn-primary" style={{ marginTop: '14px' }} onClick={generateTCs} disabled={generating}>
-            {generating ? '⏳ 생성 중...' : '🧪 TC 생성하기'}
-          </button>
-        </div></div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {parentList.map(parent => {
-            const subs    = parentMap[parent]
-            const subList = Object.keys(subs)
-            const allTCs  = subList.flatMap(s => subs[s])
-            const autoN   = allTCs.filter(t => t.type === 'auto').length
-            const manualN = allTCs.filter(t => t.type === 'manual').length
-            const revN    = allTCs.filter(tcNeedsReview).length
-            return (
-              <div key={parent} onClick={() => setSelectedParent(parent)}
-                style={{ border: `1px solid ${revN > 0 ? '#FCD34D' : 'var(--gray-200)'}`, borderRadius: '12px', padding: '16px 18px', background: revN > 0 ? '#FFFBEB' : 'white', cursor: 'pointer', transition: 'all .15s', display: 'flex', alignItems: 'center', gap: '14px' }}
-                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--primary)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 2px 12px rgba(79,70,229,.1)' }}
-                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = revN > 0 ? '#FCD34D' : 'var(--gray-200)'; (e.currentTarget as HTMLElement).style.boxShadow = 'none' }}>
-                <div style={{ width: '44px', height: '44px', borderRadius: '12px', background: 'var(--primary-light)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '22px', flexShrink: 0 }}>📁</div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 700, fontSize: '15px', color: '#1E293B', marginBottom: '5px' }}>{parent}</div>
-                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: '11px', color: '#6B7280' }}>하위 {subList.length}개 · TC {allTCs.length}개</span>
-                    {autoN   > 0 && <span style={{ fontSize: '11px', padding: '1px 7px', borderRadius: '8px', background: '#EEF2FF', color: '#4F46E5', fontWeight: 600 }}>🤖 {autoN}</span>}
-                    {manualN > 0 && <span style={{ fontSize: '11px', padding: '1px 7px', borderRadius: '8px', background: '#E0F2FE', color: '#0891B2', fontWeight: 600 }}>👤 {manualN}</span>}
-                    {revN    > 0 && <span style={{ fontSize: '11px', padding: '1px 7px', borderRadius: '8px', background: '#FEF3C7', color: '#92400E', fontWeight: 700 }}>⚠️ 검토 필요 {revN}</span>}
-                  </div>
-                </div>
-                {revN === 0 && (
-                  <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '12px', background: '#D1FAE5', color: '#059669', flexShrink: 0 }}>✓ 완료</span>
-                )}
-                <span style={{ fontSize: '18px', color: '#CBD5E1' }}>›</span>
-              </div>
-            )
-          })}
-        </div>
-      )}
-    </>
+      {/* ── RIGHT: Main content ── */}
+      <div style={{ flex: 1, minWidth: 0, paddingLeft: '20px' }}>
+        {rightContent}
+      </div>
+    </div>
   )
 }
 
@@ -1053,123 +1041,17 @@ export default function TCListPage() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// CycleRunView — Pass/Fail 기록은 여기서만
-// ═══════════════════════════════════════════════════════════════════════
-function CycleRunView({
-  cycle, planName, items, loading, onBack, onRunTC, onAddTC, onStatusChange,
-}: {
-  cycle: TestCycle; planName?: string
-  items: CycleCase[]; loading: boolean
-  onBack: () => void
-  onRunTC: (item: CycleCase) => void
-  onAddTC: () => void
-  onStatusChange: (itemId: number, status: StepStatus) => void
-}) {
-  const passN  = items.filter(i => i.cycle_status === 'pass').length
-  const failN  = items.filter(i => i.cycle_status === 'fail').length
-  const naN    = items.filter(i => i.cycle_status === 'na').length
-  const doneN  = passN + failN + naN
-  const csm    = CYCLE_STATUS_META[cycle.status] ?? CYCLE_STATUS_META.not_started
-
-  return (
-    <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '16px', fontSize: '13px', flexWrap: 'wrap' }}>
-        <button onClick={onBack} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', fontWeight: 600, padding: 0 }}>🧪 TC 목록</button>
-        {planName && <><span style={{ color: '#CBD5E1' }}>›</span><span style={{ color: '#64748B' }}>📐 {planName}</span></>}
-        <span style={{ color: '#CBD5E1' }}>›</span>
-        <span style={{ fontWeight: 600, color: '#1E293B' }}>📋 {cycle.name}</span>
-      </div>
-
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '14px' }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 700, fontSize: '18px', color: '#1E293B' }}>{cycle.name}</div>
-          <div style={{ display: 'flex', gap: '8px', marginTop: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
-            <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '10px', background: csm.bg, color: csm.color, border: `1px solid ${csm.border}` }}>{csm.label}</span>
-            <span style={{ fontSize: '11px', color: '#64748B' }}>{items.length}개 TC</span>
-          </div>
-        </div>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button onClick={onAddTC}
-            style={{ fontSize: '12px', fontWeight: 600, padding: '6px 14px', borderRadius: '7px', border: '1px solid #10B981', background: '#ECFDF5', cursor: 'pointer', color: '#059669', whiteSpace: 'nowrap' }}>
-            + TC 추가
-          </button>
-          <button className="btn btn-secondary btn-sm" onClick={onBack}>← 뒤로</button>
-        </div>
-      </div>
-
-      {items.length > 0 && (
-        <div style={{ marginBottom: '16px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#64748B', marginBottom: '5px' }}>
-            <span>사이클 진행률</span>
-            <span style={{ fontWeight: 700 }}>{doneN}/{items.length} · Pass {passN} · Fail {failN} · N/A {naN}</span>
-          </div>
-          <div style={{ height: '8px', background: '#E2E8F0', borderRadius: '4px', overflow: 'hidden', display: 'flex' }}>
-            <div style={{ height: '100%', background: '#16A34A', width: `${(passN / items.length) * 100}%`, transition: 'width .3s' }} />
-            <div style={{ height: '100%', background: '#DC2626', width: `${(failN / items.length) * 100}%`, transition: 'width .3s' }} />
-            <div style={{ height: '100%', background: '#94A3B8', width: `${(naN  / items.length) * 100}%`, transition: 'width .3s' }} />
-          </div>
-        </div>
-      )}
-
-      {loading ? (
-        <div style={{ textAlign: 'center', padding: '40px', color: '#94A3B8', fontSize: '13px' }}>불러오는 중...</div>
-      ) : items.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '40px', color: '#94A3B8', fontSize: '13px' }}>
-          이 사이클에 TC가 없습니다
-        </div>
-      ) : (
-        <div style={{ border: '1px solid #E2E8F0', borderRadius: '10px', overflow: 'hidden' }}>
-          {items.map((item, idx) => {
-            const typeMeta = TYPE_META[item.type]         ?? TYPE_META.manual
-            const priMeta  = PRIORITY_META[item.priority] ?? PRIORITY_META.medium
-            const ccm      = CYCLE_CASE_META[item.cycle_status] ?? CYCLE_CASE_META.pending
-            const { parent } = splitModule(item.module || '기타')
-            return (
-              <div key={item.id}
-                style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px', background: 'white', borderBottom: idx < items.length - 1 ? '1px solid #F1F5F9' : 'none', transition: 'background .1s' }}
-                onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = '#F8FAFC'}
-                onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'white'}>
-                <div style={{ width: '28px', height: '28px', borderRadius: '8px', background: ccm.bg, color: ccm.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '14px', fontWeight: 700, flexShrink: 0 }}>
-                  {ccm.icon}
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, fontSize: '13px', color: '#1E293B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.title}</div>
-                  <div style={{ fontSize: '10px', color: '#94A3B8', marginTop: '2px' }}>
-                    <span style={{ fontFamily: 'monospace' }}>TC-{String(item.test_case_id).padStart(3, '0')}</span>
-                    {parent ? ` · ${parent}` : ''}
-                  </div>
-                </div>
-                <span style={{ fontSize: '11px', fontWeight: 600, padding: '2px 8px', borderRadius: '8px', background: typeMeta.bg, color: typeMeta.color, border: `1px solid ${typeMeta.border}`, flexShrink: 0 }}>{typeMeta.icon}</span>
-                <span style={{ fontSize: '11px', color: priMeta.color, fontWeight: 700, flexShrink: 0 }}>{priMeta.dot}</span>
-                <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '10px', background: ccm.bg, color: ccm.color, flexShrink: 0, whiteSpace: 'nowrap' }}>{ccm.label}</span>
-                <button onClick={() => onRunTC(item)}
-                  style={{ fontSize: '11px', fontWeight: 600, padding: '5px 12px', borderRadius: '6px', border: '1px solid #3B82F6', background: '#EFF6FF', cursor: 'pointer', color: '#2563EB', flexShrink: 0, whiteSpace: 'nowrap' }}>
-                  실행 →
-                </button>
-              </div>
-            )
-          })}
-        </div>
-      )}
-    </>
-  )
-}
-
-// ═══════════════════════════════════════════════════════════════════════
 // TCStepDetail
-//   - cycleItemId 없음 → 편집 전용 (라이브러리)
-//   - cycleItemId 있음 → Pass/Fail/N/A 기록 (사이클 실행)
+//   cycleItemId 없음 → 편집 전용 (라이브러리)
+//   cycleItemId 있음 → Pass/Fail/N/A 기록 (사이클 실행)
 // ═══════════════════════════════════════════════════════════════════════
 function TCStepDetail({
   tc, onBack, onStatusChange, onExpectedChange, breadcrumb, selectedParent, selectedSub, cycleItemId,
 }: {
-  tc: TestCase
-  onBack: () => void
+  tc: TestCase; onBack: () => void
   onStatusChange: (s: 'pending' | 'pass' | 'fail') => void
   onExpectedChange?: (tcId: number, expected: string[]) => void
-  breadcrumb: ReactNode
-  selectedParent: string
-  selectedSub: string
+  breadcrumb: ReactNode; selectedParent: string; selectedSub: string
   cycleItemId?: number
 }) {
   const steps   = parseSteps(tc.steps)
@@ -1214,9 +1096,7 @@ function TCStepDetail({
 
   async function saveExpected(idx: number, val: string) {
     const next = expectedTexts.map((e, i) => i === idx ? val : e)
-    setExpectedTexts(next)
-    setEditingIdx(null)
-    setSavingExp(true)
+    setExpectedTexts(next); setEditingIdx(null); setSavingExp(true)
     try {
       await fetch(`/api/tc/${tc.id}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
@@ -1229,56 +1109,42 @@ function TCStepDetail({
   const tcStatus   = calcStatus(stepStatuses)
   const STATUS_COLORS = { pending: { label: '대기', color: '#6B7280', bg: '#F3F4F6' }, pass: { label: 'Pass', color: '#059669', bg: '#D1FAE5' }, fail: { label: 'Fail', color: '#DC2626', bg: '#FEE2E2' } }
   const tcStatMeta = STATUS_COLORS[tcStatus]
-
   const hasEmptyExp = expectedTexts.some(e => !e.trim())
 
   return (
     <>
       {breadcrumb}
-
-      <div style={{ display: 'flex', alignItems: 'flex-start', marginBottom: '14px', gap: '12px' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', marginBottom: '12px', gap: '10px' }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: '11px', color: '#94A3B8', marginBottom: '3px' }}>📁 {selectedParent}{selectedSub ? ` · 📋 ${selectedSub}` : ''}</div>
           <div style={{ fontWeight: 700, fontSize: '16px', color: '#1E293B' }}>{tc.title}</div>
-          <div style={{ fontSize: '10px', color: '#94A3B8', marginTop: '3px', fontFamily: 'monospace' }}>
-            TC-{String(tc.id).padStart(3, '0')}
-            {cycleItemId ? ' · 🔄 사이클 실행 중' : ' · ✏️ 편집 모드'}
+          <div style={{ fontSize: '10px', color: '#94A3B8', marginTop: '2px', fontFamily: 'monospace' }}>
+            TC-{String(tc.id).padStart(3, '0')} · {cycleItemId ? '🔄 사이클 실행 중' : '✏️ 편집 모드'}
           </div>
         </div>
         <button className="btn btn-secondary btn-sm" onClick={onBack}>← 뒤로</button>
       </div>
 
-      {/* Badges */}
-      <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', flexWrap: 'wrap', alignItems: 'center' }}>
-        <span style={{ fontSize: '12px', fontWeight: 600, padding: '4px 12px', borderRadius: '10px', background: typeMeta.bg, color: typeMeta.color, border: `1px solid ${typeMeta.border}` }}>{typeMeta.icon} {typeMeta.label}</span>
-        <span style={{ fontSize: '12px', fontWeight: 700, padding: '4px 12px', borderRadius: '10px', background: priMeta.bg, color: priMeta.color }}>{priMeta.dot} {priMeta.label}</span>
+      <div style={{ display: 'flex', gap: '7px', marginBottom: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
+        <span style={{ fontSize: '12px', fontWeight: 600, padding: '3px 10px', borderRadius: '10px', background: typeMeta.bg, color: typeMeta.color, border: `1px solid ${typeMeta.border}` }}>{typeMeta.icon} {typeMeta.label}</span>
+        <span style={{ fontSize: '12px', fontWeight: 700, padding: '3px 10px', borderRadius: '10px', background: priMeta.bg, color: priMeta.color }}>{priMeta.dot} {priMeta.label}</span>
         {cycleItemId && (
-          <span style={{ fontSize: '12px', fontWeight: 700, padding: '4px 12px', borderRadius: '10px', background: tcStatMeta.bg, color: tcStatMeta.color }}>
+          <span style={{ fontSize: '12px', fontWeight: 700, padding: '3px 10px', borderRadius: '10px', background: tcStatMeta.bg, color: tcStatMeta.color }}>
             {tcStatus === 'pass' ? '✅' : tcStatus === 'fail' ? '❌' : '⏳'} {tcStatMeta.label}
-            {savingStatus && <span style={{ marginLeft: '6px', fontSize: '10px', opacity: 0.6 }}>저장 중...</span>}
+            {savingStatus && <span style={{ marginLeft: '5px', fontSize: '10px', opacity: 0.6 }}>저장 중...</span>}
           </span>
         )}
-        {!cycleItemId && hasEmptyExp && (
-          <span style={{ fontSize: '12px', fontWeight: 700, padding: '4px 12px', borderRadius: '10px', background: '#FEF3C7', color: '#92400E' }}>
-            ⚠️ 기대결과 미작성 — 클릭하여 편집
-          </span>
-        )}
-        {!cycleItemId && !hasEmptyExp && (
-          <span style={{ fontSize: '12px', fontWeight: 700, padding: '4px 12px', borderRadius: '10px', background: '#D1FAE5', color: '#059669' }}>
-            ✓ 검토 완료
-            {savingExp && <span style={{ marginLeft: '6px', fontSize: '10px', opacity: 0.6 }}>저장 중...</span>}
-          </span>
-        )}
+        {!cycleItemId && hasEmptyExp && <span style={{ fontSize: '12px', fontWeight: 700, padding: '3px 10px', borderRadius: '10px', background: '#FEF3C7', color: '#92400E' }}>⚠️ 기대결과 미작성 — 클릭하여 편집</span>}
+        {!cycleItemId && !hasEmptyExp && <span style={{ fontSize: '12px', fontWeight: 700, padding: '3px 10px', borderRadius: '10px', background: '#D1FAE5', color: '#059669' }}>✓ 검토 완료{savingExp && <span style={{ marginLeft: '5px', fontSize: '10px', opacity: 0.6 }}>저장 중...</span>}</span>}
       </div>
 
-      {/* Progress (cycle mode only) */}
       {cycleItemId && steps.length > 0 && (
-        <div style={{ marginBottom: '16px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#64748B', marginBottom: '5px' }}>
+        <div style={{ marginBottom: '14px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#64748B', marginBottom: '4px' }}>
             <span>수행 진행률</span>
             <span style={{ fontWeight: 700 }}>{doneN}/{steps.length} · Pass {passN} · Fail {failN} · N/A {naN}</span>
           </div>
-          <div style={{ height: '8px', background: '#E2E8F0', borderRadius: '4px', overflow: 'hidden', display: 'flex' }}>
+          <div style={{ height: '7px', background: '#E2E8F0', borderRadius: '4px', overflow: 'hidden', display: 'flex' }}>
             <div style={{ height: '100%', background: '#16A34A', width: `${(passN / steps.length) * 100}%`, transition: 'width .3s' }} />
             <div style={{ height: '100%', background: '#DC2626', width: `${(failN / steps.length) * 100}%`, transition: 'width .3s' }} />
             <div style={{ height: '100%', background: '#94A3B8', width: `${(naN  / steps.length) * 100}%`, transition: 'width .3s' }} />
@@ -1286,7 +1152,6 @@ function TCStepDetail({
         </div>
       )}
 
-      {/* Column headers */}
       {steps.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0', marginBottom: '6px', padding: '0 4px' }}>
           <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '.07em' }}>테스트 단계</div>
@@ -1296,54 +1161,47 @@ function TCStepDetail({
         </div>
       )}
 
-      {/* Step rows */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
         {steps.map((step, si) => {
           const ss  = cycleItemId ? stepStatuses[si] : 'pending'
           const st  = STEP_STYLE[ss]
           const exp = expectedTexts[si] ?? ''
           const isEditing = editingIdx === si
-          const expEmpty = !exp.trim()
+          const expEmpty  = !exp.trim()
           return (
             <div key={si} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0', borderRadius: '8px', overflow: 'hidden', border: `1px solid ${expEmpty && !cycleItemId ? '#FCD34D' : st.border}` }}>
-              {/* Left: step */}
-              <div style={{ background: st.bg, borderLeft: `4px solid ${expEmpty && !cycleItemId ? '#F59E0B' : st.leftBorder}`, padding: '12px 14px' }}>
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: cycleItemId ? '10px' : '0' }}>
-                  <div style={{ width: '22px', height: '22px', borderRadius: '50%', background: st.numBg, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 700, flexShrink: 0 }}>
-                    {si + 1}
-                  </div>
+              <div style={{ background: st.bg, borderLeft: `4px solid ${expEmpty && !cycleItemId ? '#F59E0B' : st.leftBorder}`, padding: '11px 13px' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '9px', marginBottom: cycleItemId ? '9px' : '0' }}>
+                  <div style={{ width: '21px', height: '21px', borderRadius: '50%', background: st.numBg, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 700, flexShrink: 0 }}>{si + 1}</div>
                   <div style={{ fontSize: '12px', color: '#1E293B', lineHeight: 1.6 }}>{step}</div>
                 </div>
-                {/* Pass/Fail buttons: cycle mode only */}
                 {cycleItemId && (
-                  <div style={{ display: 'flex', gap: '5px', paddingLeft: '32px' }}>
+                  <div style={{ display: 'flex', gap: '5px', paddingLeft: '30px' }}>
                     {STEP_BTNS.map(btn => {
                       const active = stepStatuses[si] === btn.val
                       return (
                         <button key={btn.val} onClick={() => setStep(si, btn.val)}
-                          style={{ display: 'flex', alignItems: 'center', gap: '3px', padding: '3px 9px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', transition: 'all .1s', border: `1.5px solid ${active ? btn.color : '#E2E8F0'}`, background: active ? btn.bg : 'white', color: active ? btn.color : '#94A3B8' }}>
-                          <span>{btn.icon}</span><span>{btn.label}</span>
+                          style={{ display: 'flex', alignItems: 'center', gap: '3px', padding: '3px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', transition: 'all .1s', border: `1.5px solid ${active ? btn.color : '#E2E8F0'}`, background: active ? btn.bg : 'white', color: active ? btn.color : '#94A3B8' }}>
+                          {btn.icon} {btn.label}
                         </button>
                       )
                     })}
                   </div>
                 )}
               </div>
-              {/* Right: expected result */}
-              <div style={{ background: expEmpty ? '#FFFBEB' : (ss === 'pending' ? '#FAFBFF' : st.bg), borderLeft: `1px solid ${expEmpty && !cycleItemId ? '#FCD34D' : st.border}`, padding: '12px 14px', transition: 'background .15s' }}>
+              <div style={{ background: expEmpty ? '#FFFBEB' : (ss === 'pending' ? '#FAFBFF' : st.bg), borderLeft: `1px solid ${expEmpty && !cycleItemId ? '#FCD34D' : st.border}`, padding: '11px 13px' }}>
                 {isEditing ? (
                   <div>
                     <textarea autoFocus value={editingVal} onChange={e => setEditingVal(e.target.value)} rows={4}
-                      style={{ width: '100%', boxSizing: 'border-box', fontSize: '12px', lineHeight: 1.6, padding: '8px 10px', borderRadius: '6px', border: '2px solid var(--primary)', outline: 'none', fontFamily: 'inherit', resize: 'vertical' }}
-                    />
-                    <div style={{ display: 'flex', gap: '6px', marginTop: '6px', justifyContent: 'flex-end' }}>
+                      style={{ width: '100%', boxSizing: 'border-box', fontSize: '12px', lineHeight: 1.6, padding: '7px 9px', borderRadius: '6px', border: '2px solid var(--primary)', outline: 'none', fontFamily: 'inherit', resize: 'vertical' }} />
+                    <div style={{ display: 'flex', gap: '6px', marginTop: '5px', justifyContent: 'flex-end' }}>
                       <button onClick={() => setEditingIdx(null)} className="btn btn-secondary btn-sm">취소</button>
                       <button onClick={() => saveExpected(si, editingVal)} className="btn btn-primary btn-sm">저장</button>
                     </div>
                   </div>
                 ) : (
                   <div onClick={() => { setEditingIdx(si); setEditingVal(exp) }}
-                    style={{ cursor: 'text', minHeight: '48px', fontSize: '12px', color: exp ? '#1E293B' : '#F59E0B', fontWeight: exp ? 400 : 600, lineHeight: 1.6, borderRadius: '6px', padding: '4px 6px', border: '1.5px dashed transparent', transition: 'border .1s' }}
+                    style={{ cursor: 'text', minHeight: '46px', fontSize: '12px', color: exp ? '#1E293B' : '#F59E0B', fontWeight: exp ? 400 : 600, lineHeight: 1.6, borderRadius: '6px', padding: '3px 5px', border: '1.5px dashed transparent', transition: 'border .1s' }}
                     onMouseEnter={e => (e.currentTarget as HTMLElement).style.borderColor = '#CBD5E1'}
                     onMouseLeave={e => (e.currentTarget as HTMLElement).style.borderColor = 'transparent'}>
                     {exp || '⚠️ 기대 결과를 입력하세요 (클릭)'}
@@ -1355,19 +1213,18 @@ function TCStepDetail({
         })}
       </div>
 
-      {/* Result summary (cycle mode only) */}
       {cycleItemId && doneN > 0 && (
-        <div style={{ marginTop: '16px', background: tcStatus === 'pass' ? '#F0FDF4' : tcStatus === 'fail' ? '#FFF1F2' : '#F8FAFC', border: `1px solid ${tcStatus === 'pass' ? '#86EFAC' : tcStatus === 'fail' ? '#FCA5A5' : '#E2E8F0'}`, borderRadius: '10px', padding: '14px 16px' }}>
-          <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748B', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '.06em' }}>수행 결과 요약</div>
-          <div style={{ display: 'flex', gap: '10px' }}>
+        <div style={{ marginTop: '14px', background: tcStatus === 'pass' ? '#F0FDF4' : tcStatus === 'fail' ? '#FFF1F2' : '#F8FAFC', border: `1px solid ${tcStatus === 'pass' ? '#86EFAC' : tcStatus === 'fail' ? '#FCA5A5' : '#E2E8F0'}`, borderRadius: '10px', padding: '13px 15px' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748B', marginBottom: '9px', textTransform: 'uppercase', letterSpacing: '.06em' }}>수행 결과 요약</div>
+          <div style={{ display: 'flex', gap: '9px' }}>
             {[
               { label: 'Pass',   n: passN,               color: '#16A34A', bg: '#DCFCE7' },
               { label: 'Fail',   n: failN,               color: '#DC2626', bg: '#FEE2E2' },
               { label: 'N/A',    n: naN,                 color: '#64748B', bg: '#F1F5F9' },
               { label: '미수행', n: steps.length - doneN, color: '#94A3B8', bg: '#F8FAFC' },
             ].filter(r => r.n > 0).map(r => (
-              <div key={r.label} style={{ textAlign: 'center', padding: '8px 12px', background: r.bg, borderRadius: '8px', flex: 1 }}>
-                <div style={{ fontSize: '20px', fontWeight: 800, color: r.color }}>{r.n}</div>
+              <div key={r.label} style={{ textAlign: 'center', padding: '7px 11px', background: r.bg, borderRadius: '8px', flex: 1 }}>
+                <div style={{ fontSize: '19px', fontWeight: 800, color: r.color }}>{r.n}</div>
                 <div style={{ fontSize: '10px', color: r.color, marginTop: '2px', fontWeight: 600 }}>{r.label}</div>
               </div>
             ))}
