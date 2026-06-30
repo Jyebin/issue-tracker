@@ -144,9 +144,9 @@ function TCListPageContent() {
   const [cycleTC, setCycleTC]           = useState<CycleCase | null>(null)
 
   // Cycle bulk-select
-  const [selCycleIds, setSelCycleIds]           = useState<Set<number>>(new Set())
-  const [lastClickedCycleIdx, setLastCycleIdx]  = useState<number | null>(null)
-  const [bulkActing, setBulkActing]             = useState(false)
+  const [selCycleIds, setSelCycleIds]   = useState<Set<number>>(new Set())
+  const lastCycleIdxRef                 = useRef<number | null>(null)
+  const [bulkActing, setBulkActing]     = useState(false)
 
   // Add TC to cycle panel
   const [addTCToCycle, setAddTCToCycle]         = useState<TestCycle | null>(null)
@@ -252,7 +252,7 @@ function TCListPageContent() {
     } finally { setCreatingCycle(false) }
   }
   async function openCycleRun(cycle: TestCycle) {
-    setActiveCycle(cycle); setCycleLoading(true); setSelCycleIds(new Set()); setLastCycleIdx(null)
+    setActiveCycle(cycle); setCycleLoading(true); setSelCycleIds(new Set()); lastCycleIdxRef.current = null
     try { const d = await (await fetch(`/api/test-cycles/${cycle.id}/cases`)).json(); setCycleItems(d.cases ?? []) }
     finally { setCycleLoading(false) }
   }
@@ -284,14 +284,14 @@ function TCListPageContent() {
 
   // ── Cycle bulk select helpers ──────────────────────────────────────
   function handleCycleCaseClick(itemId: number, flatIdx: number, shiftKey: boolean) {
-    if (shiftKey && lastClickedCycleIdx !== null) {
-      const lo = Math.min(lastClickedCycleIdx, flatIdx)
-      const hi = Math.max(lastClickedCycleIdx, flatIdx)
+    if (shiftKey && lastCycleIdxRef.current !== null) {
+      const lo = Math.min(lastCycleIdxRef.current, flatIdx)
+      const hi = Math.max(lastCycleIdxRef.current, flatIdx)
       const rangeIds = cycleItems.slice(lo, hi + 1).map(i => i.id)
       setSelCycleIds(prev => new Set(Array.from(prev).concat(rangeIds)))
     } else {
       setSelCycleIds(prev => { const n = new Set(prev); n.has(itemId) ? n.delete(itemId) : n.add(itemId); return n })
-      setLastCycleIdx(flatIdx)
+      lastCycleIdxRef.current = flatIdx
     }
   }
   function toggleModuleGroup(ids: number[], allSelected: boolean) {
@@ -320,6 +320,16 @@ function TCListPageContent() {
   function toggleAddTC(tcId: number) {
     if (existingCycleIds.has(tcId)) return
     setAddSelectIds(prev => { const n = new Set(prev); n.has(tcId) ? n.delete(tcId) : n.add(tcId); return n })
+  }
+  function toggleAllInAdd(tcs: TestCase[]) {
+    const selectable = tcs.filter(t => !existingCycleIds.has(t.id))
+    const allSel = selectable.length > 0 && selectable.every(t => addSelectIds.has(t.id))
+    setAddSelectIds(prev => {
+      const n = new Set(prev)
+      if (allSel) selectable.forEach(t => n.delete(t.id))
+      else selectable.forEach(t => n.add(t.id))
+      return n
+    })
   }
   function toggleTC(tcId: number) {
     setSelectedTCIds(prev => { const n = new Set(prev); n.has(tcId) ? n.delete(tcId) : n.add(tcId); return n })
@@ -504,6 +514,21 @@ function TCListPageContent() {
         {/* Level 3 */}
         {addBrowseParent && addBrowseSub ? (
           <div style={{ border: '1px solid #E2E8F0', borderRadius: '10px', overflow: 'hidden' }}>
+            {/* 전체 선택 헤더 */}
+            {(() => {
+              const subTCs = addSubMap[addBrowseSub] ?? []
+              const selectable = subTCs.filter(t => !existingCycleIds.has(t.id))
+              const allSel = selectable.length > 0 && selectable.every(t => addSelectIds.has(t.id))
+              const someSel = selectable.some(t => addSelectIds.has(t.id))
+              return (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 14px', background: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
+                  <ICheckbox checked={allSel} indeterminate={someSel && !allSel} onChange={() => toggleAllInAdd(subTCs)} />
+                  <span style={{ flex: 1, fontSize: '11px', fontWeight: 700, color: '#64748B' }}>
+                    전체 선택 ({selectable.length}개 추가 가능 / 이미 추가됨 {subTCs.length - selectable.length}개)
+                  </span>
+                </div>
+              )
+            })()}
             {(addSubMap[addBrowseSub] ?? []).map((tc, idx) => {
               const tm = TYPE_META[tc.type] ?? TYPE_META.manual
               const pm = PRIORITY_META[tc.priority] ?? PRIORITY_META.medium
@@ -531,13 +556,17 @@ function TCListPageContent() {
         ) : addBrowseParent && !addBrowseSub ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {addSubList.map(sub => {
-              const sts = addSubMap[sub]; const exN = sts.filter(t => existingCycleIds.has(t.id)).length; const selN = sts.filter(t => addSelectIds.has(t.id)).length
+              const sts = addSubMap[sub]
+              const exN = sts.filter(t => existingCycleIds.has(t.id)).length
+              const selectable = sts.filter(t => !existingCycleIds.has(t.id))
+              const selN = sts.filter(t => addSelectIds.has(t.id)).length
+              const allSubSel = selectable.length > 0 && selectable.every(t => addSelectIds.has(t.id))
               return (
                 <div key={sub} onClick={() => setAddBrowseSub(sub)}
-                  style={{ border: '1px solid #E2E8F0', borderRadius: '10px', padding: '13px 16px', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px' }}
+                  style={{ border: '1px solid #E2E8F0', borderRadius: '10px', padding: '11px 14px', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px' }}
                   onMouseEnter={e => (e.currentTarget as HTMLElement).style.borderColor = 'var(--primary)'}
                   onMouseLeave={e => (e.currentTarget as HTMLElement).style.borderColor = '#E2E8F0'}>
-                  <span style={{ fontSize: '20px' }}>📋</span>
+                  <span style={{ fontSize: '18px' }}>📋</span>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 600, fontSize: '13px', color: '#1E293B' }}>{sub}</div>
                     <div style={{ display: 'flex', gap: '6px', marginTop: '3px', flexWrap: 'wrap' }}>
@@ -546,7 +575,14 @@ function TCListPageContent() {
                       {selN > 0 && <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '8px', background: '#EFF6FF', color: '#2563EB', fontWeight: 700 }}>선택 {selN}</span>}
                     </div>
                   </div>
-                  <span style={{ color: '#CBD5E1', fontSize: '16px' }}>›</span>
+                  {selectable.length > 0 && (
+                    <button
+                      onClick={e => { e.stopPropagation(); toggleAllInAdd(sts) }}
+                      style={{ fontSize: '11px', fontWeight: 700, padding: '4px 10px', borderRadius: '6px', border: `1px solid ${allSubSel ? '#3B82F6' : '#D1D5DB'}`, background: allSubSel ? '#EFF6FF' : 'white', color: allSubSel ? '#2563EB' : '#6B7280', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                      {allSubSel ? '✓ 전체 선택됨' : `전체 선택 (${selectable.length})`}
+                    </button>
+                  )}
+                  <span style={{ color: '#CBD5E1', fontSize: '16px', flexShrink: 0 }}>›</span>
                 </div>
               )
             })}
@@ -556,13 +592,15 @@ function TCListPageContent() {
             {parentList.map(parent => {
               const allTCs = Object.values(parentMap[parent]).flat()
               const exN = allTCs.filter(t => existingCycleIds.has(t.id)).length
+              const selectable = allTCs.filter(t => !existingCycleIds.has(t.id))
               const selN = allTCs.filter(t => addSelectIds.has(t.id)).length
+              const allParentSel = selectable.length > 0 && selectable.every(t => addSelectIds.has(t.id))
               return (
                 <div key={parent} onClick={() => setAddBrowseParent(parent)}
-                  style={{ border: '1px solid #E2E8F0', borderRadius: '12px', padding: '14px 16px', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '12px' }}
+                  style={{ border: '1px solid #E2E8F0', borderRadius: '12px', padding: '12px 14px', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px' }}
                   onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--primary)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 2px 12px rgba(79,70,229,.1)' }}
                   onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = '#E2E8F0'; (e.currentTarget as HTMLElement).style.boxShadow = 'none' }}>
-                  <span style={{ fontSize: '24px' }}>📁</span>
+                  <span style={{ fontSize: '22px' }}>📁</span>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 700, fontSize: '14px', color: '#1E293B' }}>{parent}</div>
                     <div style={{ display: 'flex', gap: '6px', marginTop: '3px', flexWrap: 'wrap' }}>
@@ -571,7 +609,14 @@ function TCListPageContent() {
                       {selN > 0 && <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '8px', background: '#EFF6FF', color: '#2563EB', fontWeight: 700 }}>선택 {selN}</span>}
                     </div>
                   </div>
-                  <span style={{ color: '#CBD5E1', fontSize: '18px' }}>›</span>
+                  {selectable.length > 0 && (
+                    <button
+                      onClick={e => { e.stopPropagation(); toggleAllInAdd(allTCs) }}
+                      style={{ fontSize: '11px', fontWeight: 700, padding: '5px 11px', borderRadius: '7px', border: `1px solid ${allParentSel ? '#3B82F6' : '#D1D5DB'}`, background: allParentSel ? '#EFF6FF' : 'white', color: allParentSel ? '#2563EB' : '#6B7280', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                      {allParentSel ? '✓ 전체 선택됨' : `전체 선택 (${selectable.length})`}
+                    </button>
+                  )}
+                  <span style={{ color: '#CBD5E1', fontSize: '18px', flexShrink: 0 }}>›</span>
                 </div>
               )
             })}
