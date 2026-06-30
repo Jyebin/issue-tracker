@@ -666,8 +666,10 @@ function TCListPageContent() {
             </div>
           </div>
           <button onClick={() => openAddTCPanel(activeCycle, true)}
-            style={{ fontSize: '12px', fontWeight: 600, padding: '6px 14px', borderRadius: '7px', border: '1px solid #10B981', background: '#ECFDF5', cursor: 'pointer', color: '#059669', whiteSpace: 'nowrap' }}>
-            + TC 추가
+            style={{ fontSize: '13px', fontWeight: 700, padding: '8px 16px', borderRadius: '8px', border: 'none', background: 'linear-gradient(135deg,#34D399,#10B981)', cursor: 'pointer', color: 'white', whiteSpace: 'nowrap', boxShadow: '0 3px 12px rgba(16,185,129,.4)' }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.transform = 'translateY(-2px)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 6px 20px rgba(16,185,129,.5)' }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.transform = 'none'; (e.currentTarget as HTMLElement).style.boxShadow = '0 3px 12px rgba(16,185,129,.4)' }}>
+            ＋ TC 추가
           </button>
         </div>
 
@@ -768,8 +770,10 @@ function TCListPageContent() {
                         <span style={{ fontSize: '10px', fontWeight: 700, color: pm.color, flexShrink: 0 }}>{pm.dot}</span>
                         <span style={{ fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '8px', background: ccm.bg, color: ccm.color, flexShrink: 0, whiteSpace: 'nowrap' }}>{ccm.label}</span>
                         <button onClick={e => { e.stopPropagation(); setCycleTC(item) }}
-                          style={{ fontSize: '11px', fontWeight: 600, padding: '4px 10px', borderRadius: '6px', border: '1px solid #3B82F6', background: '#EFF6FF', cursor: 'pointer', color: '#2563EB', flexShrink: 0, whiteSpace: 'nowrap' }}>
-                          단계 실행
+                          style={{ fontSize: '12px', fontWeight: 700, padding: '5px 12px', borderRadius: '7px', border: 'none', background: 'linear-gradient(135deg,#60A5FA,#3B82F6)', cursor: 'pointer', color: 'white', flexShrink: 0, whiteSpace: 'nowrap', boxShadow: '0 2px 8px rgba(59,130,246,.35)' }}
+                          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.transform = 'translateY(-1px)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 4px 14px rgba(59,130,246,.5)' }}
+                          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.transform = 'none'; (e.currentTarget as HTMLElement).style.boxShadow = '0 2px 8px rgba(59,130,246,.35)' }}>
+                          ▶ 단계 실행
                         </button>
                       </div>
                     )
@@ -974,23 +978,31 @@ function TCListPageContent() {
         </div>
 
         {/* Plan section */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '7px' }}>
+        <div style={{ marginBottom: '8px' }}>
           <span style={{ fontSize: '10px', fontWeight: 700, color: '#94A3B8', letterSpacing: '.06em', textTransform: 'uppercase' }}>플랜 & 사이클</span>
-          <button onClick={() => setShowNewPlan(v => !v)}
-            style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '5px', border: '1px solid #D1D5DB', background: 'white', cursor: 'pointer', color: '#6B7280', fontWeight: 600 }}>
-            + 플랜
-          </button>
         </div>
 
+        <button onClick={() => setShowNewPlan(v => !v)}
+          style={{ width: '100%', marginBottom: '8px', padding: '9px 12px', borderRadius: '9px', border: `2px dashed ${showNewPlan ? '#6366F1' : '#C7D2FE'}`, background: showNewPlan ? '#EEF2FF' : '#F8FAFF', cursor: 'pointer', color: '#4F46E5', fontWeight: 700, fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', transition: 'all .18s' }}
+          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = '#6366F1'; (e.currentTarget as HTMLElement).style.background = '#EEF2FF'; (e.currentTarget as HTMLElement).style.transform = 'translateY(-1px)' }}
+          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = showNewPlan ? '#6366F1' : '#C7D2FE'; (e.currentTarget as HTMLElement).style.background = showNewPlan ? '#EEF2FF' : '#F8FAFF'; (e.currentTarget as HTMLElement).style.transform = 'none' }}>
+          ＋ 플랜 추가
+        </button>
+
         {showNewPlan && (
-          <div style={{ display: 'flex', gap: '4px', alignItems: 'center', marginBottom: '7px' }}>
-            <input autoFocus placeholder="플랜 이름..." value={newPlanName} onChange={e => setNewPlanName(e.target.value)}
+          <div style={{ marginBottom: '10px', background: '#EEF2FF', borderRadius: '9px', padding: '10px' }}>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: '#4F46E5', marginBottom: '7px' }}>새 테스트 플랜</div>
+            <input autoFocus placeholder="플랜 이름 입력..." value={newPlanName} onChange={e => setNewPlanName(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') createPlan(); if (e.key === 'Escape') { setShowNewPlan(false); setNewPlanName('') } }}
-              style={{ flex: 1, padding: '5px 8px', borderRadius: '5px', border: '1.5px solid #93C5FD', outline: 'none', fontSize: '11px' }} />
-            <button onClick={createPlan} disabled={planSaving || !newPlanName.trim()}
-              style={{ padding: '4px 8px', borderRadius: '5px', border: 'none', background: '#3B82F6', color: 'white', cursor: 'pointer', fontWeight: 700, fontSize: '11px' }}>✓</button>
-            <button onClick={() => { setShowNewPlan(false); setNewPlanName('') }}
-              style={{ padding: '4px 8px', borderRadius: '5px', border: '1px solid #D1D5DB', background: 'white', cursor: 'pointer', fontSize: '11px' }}>✕</button>
+              style={{ width: '100%', boxSizing: 'border-box', padding: '7px 10px', borderRadius: '7px', border: '2px solid #818CF8', outline: 'none', fontSize: '12px', marginBottom: '7px', background: 'white' }} />
+            <div style={{ display: 'flex', gap: '5px' }}>
+              <button onClick={createPlan} disabled={planSaving || !newPlanName.trim()}
+                style={{ flex: 1, padding: '7px', borderRadius: '7px', border: 'none', background: 'linear-gradient(135deg,#6366F1,#4F46E5)', color: 'white', cursor: 'pointer', fontWeight: 700, fontSize: '12px', boxShadow: '0 3px 10px rgba(79,70,229,.35)' }}>
+                {planSaving ? '저장 중...' : '✓ 만들기'}
+              </button>
+              <button onClick={() => { setShowNewPlan(false); setNewPlanName('') }}
+                style={{ padding: '7px 11px', borderRadius: '7px', border: '1.5px solid #C7D2FE', background: 'white', cursor: 'pointer', fontSize: '12px', color: '#6B7280', fontWeight: 600 }}>✕</button>
+            </div>
           </div>
         )}
 
@@ -1003,63 +1015,75 @@ function TCListPageContent() {
           return (
             <div key={plan.id} style={{ marginBottom: '3px' }}>
               <div onClick={() => setExpandedPlanIds(prev => { const n = new Set(prev); n.has(plan.id) ? n.delete(plan.id) : n.add(plan.id); return n })}
-                style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '6px 8px', borderRadius: '7px', cursor: 'pointer', background: isExp ? '#F0F9FF' : 'transparent', userSelect: 'none', transition: 'background .12s' }}
-                onMouseEnter={e => { if (!isExp) (e.currentTarget as HTMLElement).style.background = '#F8FAFC' }}
-                onMouseLeave={e => { if (!isExp) (e.currentTarget as HTMLElement).style.background = 'transparent' }}>
-                <span style={{ fontSize: '8px', color: '#94A3B8', display: 'inline-block', transition: 'transform .15s', transform: isExp ? 'rotate(90deg)' : 'none', flexShrink: 0 }}>▶</span>
-                <span style={{ flex: 1, fontSize: '12px', fontWeight: 600, color: '#1E293B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{plan.name}</span>
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 10px', borderRadius: '9px', cursor: 'pointer', background: isExp ? '#EEF2FF' : 'white', border: `1px solid ${isExp ? '#C7D2FE' : '#E2E8F0'}`, userSelect: 'none', transition: 'all .15s', marginBottom: '4px' }}
+                onMouseEnter={e => { if (!isExp) { (e.currentTarget as HTMLElement).style.background = '#F5F3FF'; (e.currentTarget as HTMLElement).style.borderColor = '#C7D2FE' } }}
+                onMouseLeave={e => { if (!isExp) { (e.currentTarget as HTMLElement).style.background = 'white'; (e.currentTarget as HTMLElement).style.borderColor = '#E2E8F0' } }}>
+                <span style={{ fontSize: '9px', color: isExp ? '#4F46E5' : '#94A3B8', display: 'inline-block', transition: 'transform .15s', transform: isExp ? 'rotate(90deg)' : 'none', flexShrink: 0 }}>▶</span>
+                <span style={{ flex: 1, fontSize: '12px', fontWeight: 700, color: isExp ? '#4F46E5' : '#1E293B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{plan.name}</span>
                 <button onClick={e => { e.stopPropagation(); setShowNewCycleFor(plan.id); setExpandedPlanIds(prev => new Set(Array.from(prev).concat(plan.id))) }}
-                  style={{ fontSize: '9px', padding: '2px 6px', borderRadius: '4px', border: '1px solid #D1D5DB', background: 'white', cursor: 'pointer', color: '#9CA3AF', flexShrink: 0 }}>
+                  style={{ fontSize: '11px', padding: '4px 9px', borderRadius: '6px', border: 'none', background: 'linear-gradient(135deg,#818CF8,#6366F1)', color: 'white', cursor: 'pointer', fontWeight: 700, flexShrink: 0, boxShadow: '0 2px 6px rgba(99,102,241,.4)' }}>
                   + 사이클
                 </button>
               </div>
 
               {isExp && (
-                <div style={{ marginLeft: '13px', marginBottom: '3px' }}>
+                <div style={{ marginLeft: '10px', marginBottom: '6px', paddingLeft: '8px', borderLeft: '2px solid #E0E7FF' }}>
                   {plan.cycles.length === 0 && showNewCycleFor !== plan.id && (
-                    <div style={{ fontSize: '10px', color: '#9CA3AF', padding: '5px 7px' }}>사이클 없음</div>
+                    <div style={{ fontSize: '11px', color: '#9CA3AF', padding: '6px 4px', fontStyle: 'italic' }}>사이클 없음</div>
                   )}
                   {plan.cycles.map(cycle => {
-                    const csm    = CYCLE_STATUS_META[cycle.status] ?? CYCLE_STATUS_META.not_started
-                    const isAct  = activeCycle?.id === cycle.id
-                    const pct    = cycle.tcCount > 0 ? Math.round((cycle.passCount + cycle.failCount) / cycle.tcCount * 100) : 0
+                    const csm   = CYCLE_STATUS_META[cycle.status] ?? CYCLE_STATUS_META.not_started
+                    const isAct = activeCycle?.id === cycle.id
+                    const pct   = cycle.tcCount > 0 ? Math.round((cycle.passCount + cycle.failCount) / cycle.tcCount * 100) : 0
                     return (
-                      <div key={cycle.id} style={{ padding: '5px 7px', borderRadius: '6px', marginBottom: '2px', background: isAct ? '#EFF6FF' : 'transparent', border: `1px solid ${isAct ? '#BFDBFE' : 'transparent'}`, transition: 'all .12s' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '3px' }}>
-                          <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: csm.color, flexShrink: 0 }} />
-                          <span style={{ flex: 1, fontSize: '11px', fontWeight: 600, color: '#1E293B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cycle.name}</span>
-                          <span style={{ fontSize: '9px', fontWeight: 700, padding: '1px 5px', borderRadius: '6px', background: csm.bg, color: csm.color, border: `1px solid ${csm.border}`, flexShrink: 0 }}>{csm.label}</span>
+                      <div key={cycle.id} style={{ padding: '8px 10px', borderRadius: '8px', marginBottom: '4px', background: isAct ? 'linear-gradient(135deg,#EFF6FF,#DBEAFE)' : 'white', border: `1.5px solid ${isAct ? '#93C5FD' : '#E2E8F0'}`, transition: 'all .15s', boxShadow: isAct ? '0 2px 8px rgba(59,130,246,.15)' : '0 1px 3px rgba(0,0,0,.04)' }}>
+                        {/* 사이클 이름 + 상태 */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '5px' }}>
+                          <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: csm.color, flexShrink: 0, boxShadow: `0 0 0 2px ${csm.bg}` }} />
+                          <span style={{ flex: 1, fontSize: '12px', fontWeight: 700, color: isAct ? '#1D4ED8' : '#1E293B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cycle.name}</span>
+                          <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '8px', background: csm.bg, color: csm.color, border: `1px solid ${csm.border}`, flexShrink: 0 }}>{csm.label}</span>
                         </div>
+                        {/* 진행률 */}
                         {cycle.tcCount > 0 && (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '4px', paddingLeft: '11px' }}>
-                            <div style={{ height: '3px', flex: 1, background: '#E2E8F0', borderRadius: '2px', overflow: 'hidden' }}>
-                              <div style={{ height: '100%', background: cycle.failCount > 0 ? '#DC2626' : '#16A34A', width: `${pct}%`, transition: 'width .3s' }} />
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '7px' }}>
+                            <div style={{ height: '4px', flex: 1, background: '#E2E8F0', borderRadius: '2px', overflow: 'hidden' }}>
+                              <div style={{ height: '100%', background: cycle.failCount > 0 ? 'linear-gradient(90deg,#EF4444,#DC2626)' : 'linear-gradient(90deg,#34D399,#10B981)', width: `${pct}%`, transition: 'width .3s' }} />
                             </div>
-                            <span style={{ fontSize: '9px', color: '#94A3B8', flexShrink: 0 }}>{cycle.tcCount}TC · {pct}%</span>
+                            <span style={{ fontSize: '10px', color: '#64748B', fontWeight: 600, flexShrink: 0 }}>{cycle.tcCount}TC · {pct}%</span>
                           </div>
                         )}
-                        <div style={{ display: 'flex', gap: '3px', paddingLeft: '11px' }}>
+                        {/* 버튼 영역 */}
+                        <div style={{ display: 'flex', gap: '5px' }}>
                           <button onClick={() => openCycleRun(cycle)}
-                            style={{ flex: 1, fontSize: '10px', fontWeight: 600, padding: '3px 5px', borderRadius: '5px', border: `1px solid ${isAct ? '#3B82F6' : '#3B82F6'}`, background: isAct ? '#3B82F6' : '#EFF6FF', cursor: 'pointer', color: isAct ? 'white' : '#2563EB', whiteSpace: 'nowrap' }}>
-                            {isAct ? '● 실행중' : '실행 →'}
+                            style={{ flex: 1, fontSize: '12px', fontWeight: 700, padding: '7px 8px', borderRadius: '7px', border: 'none', background: isAct ? 'linear-gradient(135deg,#1D4ED8,#2563EB)' : 'linear-gradient(135deg,#3B82F6,#2563EB)', cursor: 'pointer', color: 'white', whiteSpace: 'nowrap', boxShadow: `0 3px 10px rgba(37,99,235,${isAct ? '.5' : '.3'})`, transition: 'all .15s' }}
+                            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.transform = 'translateY(-1px)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 5px 16px rgba(37,99,235,.45)' }}
+                            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.transform = 'none'; (e.currentTarget as HTMLElement).style.boxShadow = `0 3px 10px rgba(37,99,235,${isAct ? '.5' : '.3'})` }}>
+                            {isAct ? '● 실행중' : '▶ 실행'}
                           </button>
                           <button onClick={() => openAddTCPanel(cycle, false)}
-                            style={{ fontSize: '10px', fontWeight: 600, padding: '3px 7px', borderRadius: '5px', border: '1px solid #10B981', background: '#ECFDF5', cursor: 'pointer', color: '#059669', whiteSpace: 'nowrap' }}>
-                            +TC
+                            style={{ fontSize: '12px', fontWeight: 700, padding: '7px 11px', borderRadius: '7px', border: 'none', background: 'linear-gradient(135deg,#34D399,#10B981)', cursor: 'pointer', color: 'white', whiteSpace: 'nowrap', boxShadow: '0 3px 10px rgba(16,185,129,.35)', transition: 'all .15s' }}
+                            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.transform = 'translateY(-1px)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 5px 16px rgba(16,185,129,.45)' }}
+                            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.transform = 'none'; (e.currentTarget as HTMLElement).style.boxShadow = '0 3px 10px rgba(16,185,129,.35)' }}>
+                            + TC
                           </button>
                         </div>
                       </div>
                     )
                   })}
                   {showNewCycleFor === plan.id && (
-                    <div style={{ padding: '5px 7px', display: 'flex', gap: '4px', alignItems: 'center' }}>
-                      <input autoFocus placeholder="사이클 이름..." value={newCycleName} onChange={e => setNewCycleName(e.target.value)}
+                    <div style={{ padding: '8px', background: '#F0FDF4', borderRadius: '8px', border: '1.5px solid #6EE7B7', marginBottom: '4px' }}>
+                      <div style={{ fontSize: '11px', fontWeight: 700, color: '#059669', marginBottom: '6px' }}>새 사이클</div>
+                      <input autoFocus placeholder="사이클 이름 입력..." value={newCycleName} onChange={e => setNewCycleName(e.target.value)}
                         onKeyDown={e => { if (e.key === 'Enter') createCycleUnderPlan(plan.id); if (e.key === 'Escape') { setShowNewCycleFor(null); setNewCycleName('') } }}
-                        style={{ flex: 1, padding: '4px 6px', borderRadius: '5px', border: '1.5px solid #93C5FD', outline: 'none', fontSize: '11px' }} />
-                      <button onClick={() => createCycleUnderPlan(plan.id)} disabled={planSaving || !newCycleName.trim()}
-                        style={{ padding: '3px 7px', borderRadius: '5px', border: 'none', background: '#3B82F6', color: 'white', cursor: 'pointer', fontSize: '11px' }}>✓</button>
-                      <button onClick={() => { setShowNewCycleFor(null); setNewCycleName('') }}
-                        style={{ padding: '3px 7px', borderRadius: '5px', border: '1px solid #D1D5DB', background: 'white', cursor: 'pointer', fontSize: '11px' }}>✕</button>
+                        style={{ width: '100%', boxSizing: 'border-box', padding: '7px 9px', borderRadius: '6px', border: '2px solid #6EE7B7', outline: 'none', fontSize: '12px', marginBottom: '6px', background: 'white' }} />
+                      <div style={{ display: 'flex', gap: '5px' }}>
+                        <button onClick={() => createCycleUnderPlan(plan.id)} disabled={planSaving || !newCycleName.trim()}
+                          style={{ flex: 1, padding: '7px', borderRadius: '6px', border: 'none', background: 'linear-gradient(135deg,#34D399,#10B981)', color: 'white', cursor: 'pointer', fontWeight: 700, fontSize: '12px', boxShadow: '0 3px 10px rgba(16,185,129,.35)' }}>
+                          ✓ 만들기
+                        </button>
+                        <button onClick={() => { setShowNewCycleFor(null); setNewCycleName('') }}
+                          style={{ padding: '7px 11px', borderRadius: '6px', border: '1.5px solid #6EE7B7', background: 'white', cursor: 'pointer', fontSize: '12px', color: '#059669', fontWeight: 600 }}>✕</button>
+                      </div>
                     </div>
                   )}
                 </div>
